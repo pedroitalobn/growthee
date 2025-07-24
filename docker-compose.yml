@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: enrichstory
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+  
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+  
+  backend:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://postgres:password@postgres:5432/enrichstory
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET_KEY: your-secret-key
+      STRIPE_SECRET_KEY: sk_test_...
+      STRIPE_WEBHOOK_SECRET: whsec_...
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8000:8000"
+  
+  frontend:
+    build: ./frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: pk_test_...
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:

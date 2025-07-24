@@ -1,0 +1,116 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  passwordHash    String   @map("password_hash")
+  fullName        String   @map("full_name")
+  companyName     String?  @map("company_name")
+  role            UserRole @default(USER)
+  plan            PlanType @default(FREE)
+  creditsRemaining Int     @default(0) @map("credits_remaining")
+  creditsTotal    Int      @default(0) @map("credits_total")
+  isActive        Boolean  @default(true) @map("is_active")
+  stripeCustomerId String? @map("stripe_customer_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  lastLogin       DateTime? @map("last_login")
+  
+  apiKeys         ApiKey[]
+  creditTransactions CreditTransaction[]
+  subscriptions   Subscription[]
+  
+  @@map("users")
+}
+
+model Plan {
+  id              String   @id @default(cuid())
+  name            String
+  type            PlanType @unique
+  creditsIncluded Int      @map("credits_included")
+  priceMonthly    Float    @map("price_monthly")
+  priceYearly     Float    @map("price_yearly")
+  features        String[]
+  isActive        Boolean  @default(true) @map("is_active")
+  stripePriceId   String?  @map("stripe_price_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  
+  subscriptions   Subscription[]
+  
+  @@map("plans")
+}
+
+model ApiKey {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  key       String   @unique
+  name      String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  lastUsed  DateTime? @map("last_used")
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("api_keys")
+}
+
+model CreditTransaction {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  endpoint       String
+  creditsUsed    Int      @map("credits_used")
+  requestData    Json     @map("request_data")
+  responseStatus String   @map("response_status")
+  ipAddress      String?  @map("ip_address")
+  userAgent      String?  @map("user_agent")
+  createdAt      DateTime @default(now()) @map("created_at")
+  
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("credit_transactions")
+}
+
+model Subscription {
+  id                String            @id @default(cuid())
+  userId            String            @map("user_id")
+  planId            String            @map("plan_id")
+  stripeSubscriptionId String?        @map("stripe_subscription_id")
+  status            SubscriptionStatus @default(ACTIVE)
+  currentPeriodStart DateTime         @map("current_period_start")
+  currentPeriodEnd   DateTime         @map("current_period_end")
+  cancelAtPeriodEnd  Boolean          @default(false) @map("cancel_at_period_end")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+  
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan              Plan             @relation(fields: [planId], references: [id])
+  
+  @@map("subscriptions")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum PlanType {
+  FREE
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  UNPAID
+}
