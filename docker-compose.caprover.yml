@@ -1,9 +1,7 @@
 version: '3.8'
 services:
   $$cap_appname:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.prod
+    image: mrstory/enrichstory-frontend:latest
     environment:
       - NEXT_PUBLIC_API_URL=https://enrich.mrstory.app/api
       - NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=$$cap_stripe_public_key
@@ -14,9 +12,7 @@ services:
       - "80:3000"
 
   $$cap_appname-backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.prod
+    image: mrstory/enrichstory-backend:latest
     environment:
       - DATABASE_URL=postgresql://$$cap_postgres_user:$$cap_postgres_password@srv-captain--mrs-enrichstory-db:5432/enrichstory
       - REDIS_URL=redis://$$cap_appname-redis:6379
