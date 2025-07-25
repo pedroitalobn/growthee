@@ -17,7 +17,7 @@ services:
       - DATABASE_URL=postgresql://$$cap_postgres_user:$$cap_postgres_password@srv-captain--mrs-enrichstory-db:5432/enrichstory
       - REDIS_URL=redis://$$cap_appname-redis:6379
       - JWT_SECRET_KEY=$$cap_jwt_secret
-      - STRIPE_SECRET_KEY=$$cap_stripe_secret
+      - STRIPE_SECRET_KEY=$$cap_stripe_
       - BRAVE_API_KEY=$$cap_brave_token
     depends_on:
       - $$cap_appname-redis

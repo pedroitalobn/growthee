@@ -6,8 +6,8 @@ WORKDIR /app
 # Copiar package files
 COPY package*.json ./
 
-# Instalar dependências
-RUN npm ci --only=production
+# Instalar dependências (incluindo devDependencies para build)
+RUN npm ci
 
 # Copiar código fonte
 COPY . .
@@ -24,37 +24,16 @@ WORKDIR /app
 RUN addgroup -g 1001 -S nodejs
 RUN adduser -S nextjs -u 1001
 
-# Copiar apenas arquivos necessários (sem public se não existir)
+# Copiar arquivos do build standalone
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Copiar public apenas se existir
+# Copiar public se existir
 COPY --from=builder /app/public ./public 2>/dev/null || true
-
-
-# Build simples para Next.js 13+
-FROM node:18-alpine
-
-WORKDIR /app
-
-# Copiar package files
-COPY package*.json ./
-
-# Instalar dependências
-RUN npm ci --only=production
-
-# Copiar código fonte
-COPY . .
-
-# Build da aplicação
-RUN npm run build
-
-# Criar usuário não-root
-RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
-RUN chown -R nextjs:nodejs /app
 
 USER nextjs
 
 EXPOSE 3000
 
-CMD ["npm", "start"]
+# COMANDO CORRETO para standalone
+CMD ["node", "server.js"]
