@@ -1,16 +1,16 @@
-from twisted.internet import reactor
-import threading
+# REMOVER ESTAS LINHAS:
+# from twisted.internet import reactor
+# import threading
 
-# Start reactor in a separate thread
-def run_reactor():
-    if not reactor.running:
-        thread = threading.Thread(target=reactor.run, args=(False,))
-        thread.daemon = True
-        thread.start()
+# def run_reactor():
+#     if not reactor.running:
+#         thread = threading.Thread(target=reactor.run, args=(False,))
+#         thread.daemon = True
+#         thread.start()
 
-# Initialize reactor before other imports
-run_reactor()
+# run_reactor()
 
+# MANTER APENAS:
 from fastapi import FastAPI, HTTPException
 from .models import CompanyRequest, CompanyResponse, PersonRequest, PersonResponse
 from .services import EnrichmentService, PersonEnrichmentService
@@ -124,10 +124,16 @@ async def enrich_people(requests: list[PersonRequest]):
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from prisma import Prisma
-from api.middleware.auth_middleware import get_current_user, check_api_key, require_credits
-from api.models import CompanyRequest, PersonRequest
-from api.services import EnrichmentService, PersonEnrichmentService
-from api.services.credit_service import CreditService
+import logging
+import os
+from dotenv import load_dotenv
+
+# Carregar variáveis de ambiente
+load_dotenv()
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="EnrichStory API", version="2.0.0")
 
@@ -140,64 +146,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database
-db = Prisma()
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "enrichstory-api", "version": "2.0.0"}
 
-@app.on_event("startup")
-async def startup():
-    await db.connect()
+@app.get("/")
+async def root():
+    return {"message": "EnrichStory API", "version": "2.0.0"}
 
-@app.on_event("shutdown")
-async def shutdown():
-    await db.disconnect()
-
-# Dependency
-async def get_db():
-    return db
-
-# Protected endpoints
-@app.post("/api/v1/enrich/company")
-@require_credits("/enrich/company", 1)
-async def enrich_company(
-    request: CompanyRequest,
-    current_user = Depends(check_api_key),  # Pode usar JWT ou API Key
-    db: Prisma = Depends(get_db)
-):
+@app.post("/api/v1/enrich/company", response_model=CompanyResponse)
+async def enrich_company(request: CompanyRequest):
     """Enriquece dados de uma empresa"""
-    service = EnrichmentService()
-    result = await service.enrich_company(request)
-    return result
+    try:
+        company_data = request.dict(exclude_unset=True)
+        
+        if not any([company_data.get('name'), company_data.get('domain'), company_data.get('linkedin_url')]):
+            raise HTTPException(
+                status_code=400, 
+                detail="Necessário fornecer pelo menos um dos campos: name, domain ou linkedin_url"
+            )
+        
+        result = await enrichment_service.enrich_company(company_data)
+        return CompanyResponse(**result)
+        
+    except ValueError as e:
+        logger.error(f"Validation error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Internal error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
-@app.post("/api/v1/enrich/person")
-@require_credits("/enrich/person", 2)
-async def enrich_person(
-    request: PersonRequest,
-    current_user = Depends(check_api_key),
-    db: Prisma = Depends(get_db)
-):
+@app.post("/api/v1/enrich/person", response_model=PersonResponse)
+async def enrich_person(request: PersonRequest):
     """Enriquece dados de uma pessoa"""
-    service = PersonEnrichmentService()
-    result = await service.enrich_person(request)
-    return result
+    try:
+        person_data = request.dict(exclude_unset=True)
+        
+        if not request.has_valid_input:
+            raise HTTPException(
+                status_code=400, 
+                detail="Necessário fornecer pelo menos um dos campos: email, linkedin_url, phone ou full_name"
+            )
+        
+        result = await person_enrichment_service.enrich_person(**person_data)
+        return PersonResponse(**result)
+        
+    except ValueError as e:
+        logger.error(f"Validation error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Internal error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
-# Dashboard endpoints
-@app.get("/api/v1/dashboard/stats")
-async def get_dashboard_stats(
-    current_user = Depends(get_current_user),
-    db: Prisma = Depends(get_db)
-):
-    """Estatísticas do dashboard do usuário"""
-    credit_service = CreditService(db)
-    stats = await credit_service.get_usage_stats(current_user.id)
-    
-    return {
-        "user": {
-            "credits_remaining": current_user.creditsRemaining,
-            "credits_total": current_user.creditsTotal,
-            "plan": current_user.plan
-        },
-        "usage": stats
-    }
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 sentry_sdk.init(
     dsn="https://seu-dsn@sentry.io/projeto",

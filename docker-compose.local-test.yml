@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  enrichstory-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: enrichstory
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: testpassword123
+    volumes:
+      - enrichstory-db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  enrichstory-redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  enrichstory-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    environment:
+      - DATABASE_URL=postgresql://postgres:testpassword123@enrichstory-db:5432/enrichstory
+      - REDIS_URL=redis://enrichstory-redis:6379
+      - JWT_SECRET_KEY=test-jwt-secret-key-for-local-development-only-64-chars-long
+      - STRIPE_SECRET_KEY=sk_test_dummy
+      - BRAVE_SEARCH_TOKEN=dummy_token
+    depends_on:
+      - enrichstory-db
+      - enrichstory-redis
+    ports:
+      - "8000:8000"
+
+  enrichstory-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_dummy
+    depends_on:
+      - enrichstory-backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  enrichstory-db-data:

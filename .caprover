@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "templateId": "enrichstory",
+  "variables": [
+    {
+      "id": "$$cap_postgres_user",
+      "label": "PostgreSQL User",
+      "defaultValue": "postgres",
+      "description": "Username for PostgreSQL database"
+    },
+    {
+      "id": "$$cap_postgres_password",
+      "label": "PostgreSQL Password",
+      "description": "Password for PostgreSQL database"
+    },
+    {
+      "id": "$$cap_jwt_secret",
+      "label": "JWT Secret Key",
+      "description": "Secret key for JWT token generation"
+    },
+    {
+      "id": "$$cap_stripe_secret",
+      "label": "Stripe Secret Key",
+      "description": "Stripe secret key for payments"
+    },
+    {
+      "id": "$$cap_stripe_public_key",
+      "label": "Stripe Publishable Key",
+      "description": "Stripe publishable key for frontend"
+    },
+    {
+      "id": "$$cap_brave_token",
+      "label": "Brave Search Token",
+      "description": "API token for Brave Search"
+    }
+  ]
+}

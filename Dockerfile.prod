@@ -1,0 +1,51 @@
+# Build definitivo - sem problemas de hash mismatch
+FROM python:3.11-bullseye as builder
+
+WORKDIR /app
+
+# Instalar dependências essenciais
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copiar e instalar dependências
+COPY requirements-prod.txt .
+RUN pip install --no-cache-dir --user -r requirements-prod.txt
+
+# Instalar Playwright browsers
+RUN /root/.local/bin/playwright install chromium
+
+# Stage final
+FROM python:3.11-bullseye
+
+WORKDIR /app
+
+# Instalar apenas runtime essencial
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Criar usuário não-root
+RUN useradd --create-home --shell /bin/bash app
+
+# Copiar dependências e browsers
+COPY --from=builder /root/.local /home/app/.local
+COPY --from=builder /root/.cache/ms-playwright /home/app/.cache/ms-playwright
+
+# Copiar código
+COPY api/ ./api/
+COPY .env* ./
+
+# Configurar permissões
+RUN mkdir -p logs && chown -R app:app /app
+
+USER app
+ENV PATH=/home/app/.local/bin:$PATH
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

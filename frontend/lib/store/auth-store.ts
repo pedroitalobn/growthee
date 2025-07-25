@@ -21,7 +21,7 @@ interface AuthState {
   updateCredits: (credits: number) => void
 }
 
-export const useAuthStore = create<AuthState>()()
+export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
       user: null,
@@ -37,3 +37,4 @@ export const useAuthStore = create<AuthState>()()
       name: 'auth-storage'
     }
   )
+)

@@ -1,16 +1,40 @@
 from fastapi import Request, HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
-from prisma import Prisma
-from api.auth.jwt_service import JWTService
-from api.services.credit_service import CreditService
+from datetime import datetime
+import logging
+
+# Importações condicionais
+try:
+    from prisma import Prisma
+    from api.auth.jwt_service import JWTService
+except ImportError as e:
+    logging.warning(f"Import warning in auth_middleware: {e}")
+    Prisma = None
+    JWTService = None
 
 security = HTTPBearer()
-jwt_service = JWTService()
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), 
-                          db: Prisma = Depends()):
+def get_jwt_service():
+    if JWTService is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="JWT service not available"
+        )
+    return JWTService()
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security), 
+    db: Optional[Prisma] = None
+):
     """Middleware para autenticação JWT"""
+    if db is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database not available"
+        )
+    
+    jwt_service = get_jwt_service()
     token = credentials.credentials
     payload = jwt_service.verify_token(token)
     
@@ -21,26 +45,29 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             detail="Invalid token"
         )
     
-    user = await db.user.find_unique(where={"id": user_id})
-    if not user or not user.isActive:
+    try:
+        user = await db.user.find_unique(where={"id": user_id})
+        if not user or not user.isActive:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found or inactive"
+            )
+        return user
+    except Exception as e:
+        logging.error(f"Database error in auth: {e}")
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found or inactive"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication service error"
+        )
+
+async def check_api_key(request: Request, db: Optional[Prisma] = None):
+    """Middleware para autenticação via API Key"""
+    if db is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database not available"
         )
     
-    return user
-
-async def get_current_active_user(current_user = Depends(get_current_user)):
-    """Verifica se o usuário está ativo"""
-    if not current_user.isActive:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Inactive user"
-        )
-    return current_user
-
-async def check_api_key(request: Request, db: Prisma = Depends()):
-    """Middleware para autenticação via API Key"""
     api_key = request.headers.get("X-API-Key")
     if not api_key:
         raise HTTPException(
@@ -48,57 +75,28 @@ async def check_api_key(request: Request, db: Prisma = Depends()):
             detail="API Key required"
         )
     
-    key_record = await db.apikey.find_unique(
-        where={"key": api_key},
-        include={"user": True}
-    )
-    
-    if not key_record or not key_record.isActive or not key_record.user.isActive:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or inactive API Key"
+    try:
+        key_record = await db.apikey.find_unique(
+            where={"key": api_key},
+            include={"user": True}
         )
-    
-    # Atualiza último uso
-    await db.apikey.update(
-        where={"id": key_record.id},
-        data={"lastUsed": datetime.utcnow()}
-    )
-    
-    return key_record.user
-
-async def require_credits(endpoint: str, quantity: int = 1):
-    """Decorator para verificar créditos antes da execução"""
-    def decorator(func):
-        async def wrapper(*args, **kwargs):
-            # Extrair usuário do contexto
-            user = kwargs.get('current_user') or kwargs.get('user')
-            if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Authentication required"
-                )
-            
-            # Verificar créditos
-            credit_service = CreditService(kwargs.get('db'))
-            has_credits = await credit_service.check_credits(user.id, endpoint, quantity)
-            
-            if not has_credits:
-                raise HTTPException(
-                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                    detail="Insufficient credits"
-                )
-            
-            # Executar função
-            result = await func(*args, **kwargs)
-            
-            # Consumir créditos após sucesso
-            await credit_service.consume_credits(
-                user.id, endpoint, 
-                kwargs.get('request_data', {}),
-                "success", quantity
+        
+        if not key_record or not key_record.isActive or not key_record.user.isActive:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or inactive API Key"
             )
-            
-            return result
-        return wrapper
-    return decorator
+        
+        # Atualiza último uso
+        await db.apikey.update(
+            where={"id": key_record.id},
+            data={"lastUsed": datetime.utcnow()}
+        )
+        
+        return key_record.user
+    except Exception as e:
+        logging.error(f"Database error in API key auth: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication service error"
+        )

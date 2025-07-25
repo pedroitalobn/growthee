@@ -1,5 +1,4 @@
 import axios from 'axios'
-import { useAuthStore } from '@/lib/store/auth-store'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -12,9 +11,19 @@ export const apiClient = axios.create({
 
 // Interceptor para adicionar token
 apiClient.interceptors.request.use((config) => {
-  const token = useAuthStore.getState().token
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
+  if (typeof window !== 'undefined') {
+    const authStore = localStorage.getItem('auth-storage')
+    if (authStore) {
+      try {
+        const parsed = JSON.parse(authStore)
+        const token = parsed.state?.token
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`
+        }
+      } catch (e) {
+        console.error('Error parsing auth store:', e)
+      }
+    }
   }
   return config
 })
@@ -23,8 +32,8 @@ apiClient.interceptors.request.use((config) => {
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      useAuthStore.getState().logout()
+    if (error.response?.status === 401 && typeof window !== 'undefined') {
+      localStorage.removeItem('auth-storage')
       window.location.href = '/login'
     }
     return Promise.reject(error)
@@ -73,6 +82,21 @@ export const billingApi = {
   },
   getInvoices: async () => {
     const response = await apiClient.get('/api/v1/billing/invoices')
+    return response.data
+  }
+}
+
+export const adminApi = {
+  getAdminStats: async () => {
+    const response = await apiClient.get('/api/v1/admin/stats')
+    return response.data
+  },
+  getAllUsers: async () => {
+    const response = await apiClient.get('/api/v1/admin/users')
+    return response.data
+  },
+  getCustomEndpoints: async () => {
+    const response = await apiClient.get('/api/v1/admin/endpoints')
     return response.data
   }
 }
