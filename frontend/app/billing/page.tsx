@@ -1,26 +1,47 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { billingApi } from '@/lib/api/client'
+import { billingApi, authApi } from '@/lib/api/client'
 import { useAuthStore } from '@/lib/store/auth-store'
 import { Check, Crown, Zap, Rocket } from 'lucide-react'
 import { loadStripe } from '@stripe/stripe-js'
+import { useRouter } from 'next/navigation'
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!)
 
 export default function BillingPage() {
   const { user } = useAuthStore()
   const [loading, setLoading] = useState<string | null>(null)
+  const router = useRouter()
+  const [signupData, setSignupData] = useState<any>(null)
   
+  useEffect(() => {
+    // Recuperar dados do registro se existirem
+    const data = sessionStorage.getItem('signupData')
+    if (data) {
+      setSignupData(JSON.parse(data))
+    }
+  }, [])
+
   const { data: plans } = useQuery({
     queryKey: ['billing-plans'],
     queryFn: billingApi.getPlans
   })
   
+  const registerMutation = useMutation({
+    mutationFn: authApi.register,
+    onSuccess: (data) => {
+      // Limpar dados do registro
+      sessionStorage.removeItem('signupData')
+      // Redirecionar para checkout
+      handleUpgrade(data.planId)
+    }
+  })
+
   const checkoutMutation = useMutation({
     mutationFn: billingApi.createCheckoutSession,
     onSuccess: async (data) => {
@@ -34,7 +55,16 @@ export default function BillingPage() {
   
   const handleUpgrade = async (planId: string) => {
     setLoading(planId)
-    checkoutMutation.mutate(planId)
+    if (signupData) {
+      // Se temos dados de registro, criar a conta primeiro
+      registerMutation.mutate({
+        ...signupData,
+        planId
+      })
+    } else {
+      // Se já estamos logados, ir direto para o checkout
+      checkoutMutation.mutate(planId)
+    }
   }
   
   const planIcons = {

@@ -65,7 +65,7 @@ class UserRegister(BaseModel):
     company_name: Optional[str] = None
 
 class UserLogin(BaseModel):
-    email: EmailStr
+    emailOrUsername: str
     password: str
 
 class TokenResponse(BaseModel):

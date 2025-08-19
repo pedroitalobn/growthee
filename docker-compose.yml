@@ -18,12 +18,20 @@ services:
   backend:
     build:
       context: .
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.ultra-fast  # Mudança aqui!
     ports:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://postgres:password@postgres:5432/enrichstory
       - REDIS_URL=redis://redis:6379
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - LINKEDIN_EMAIL=${LINKEDIN_EMAIL}
+      - LINKEDIN_PASSWORD=${LINKEDIN_PASSWORD}
+      - FRONTEND_URL=${FRONTEND_URL}
     depends_on:
       - postgres
       - redis
@@ -34,6 +42,7 @@ services:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
     depends_on:
       - backend
 

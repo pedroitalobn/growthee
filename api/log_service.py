@@ -69,5 +69,8 @@ class LogService:
             'details': self._make_serializable(details or {})
         }
         
+        # Adicionar log para stdout também
+        print(json.dumps(log_entry), flush=True)
+        
         with open(os.path.join(self.log_dir, self.debug_log), 'a') as f:
             f.write(json.dumps(log_entry) + '\n')

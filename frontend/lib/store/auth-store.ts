@@ -19,6 +19,7 @@ interface AuthState {
   login: (token: string, user: User) => void
   logout: () => void
   updateCredits: (credits: number) => void
+  checkAuth: () => void
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -31,7 +32,13 @@ export const useAuthStore = create<AuthState>()(
       logout: () => set({ token: null, user: null, isAuthenticated: false }),
       updateCredits: (credits) => set((state) => ({
         user: state.user ? { ...state.user, creditsRemaining: credits } : null
-      }))
+      })),
+      checkAuth: () => {
+        const state = useAuthStore.getState()
+        if (state.token && !state.isAuthenticated) {
+          set({ isAuthenticated: true })
+        }
+      }
     }),
     {
       name: 'auth-storage'

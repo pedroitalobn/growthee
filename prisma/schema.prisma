@@ -1,10 +1,10 @@
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client-py"
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider = "sqlite"
+  url      = "file:./dev.db"
 }
 
 model User {
@@ -13,8 +13,8 @@ model User {
   passwordHash    String   @map("password_hash")
   fullName        String   @map("full_name")
   companyName     String?  @map("company_name")
-  role            UserRole @default(USER)
-  plan            PlanType @default(FREE)
+  role            String   // Replaced enum UserRole
+  plan            String   // Replaced enum PlanType
   creditsRemaining Int     @default(0) @map("credits_remaining")
   creditsTotal    Int      @default(0) @map("credits_total")
   isActive        Boolean  @default(true) @map("is_active")
@@ -33,11 +33,11 @@ model User {
 model Plan {
   id              String   @id @default(cuid())
   name            String
-  type            PlanType @unique
+  type            String   @unique // Replaced enum PlanType
   creditsIncluded Int      @map("credits_included")
   priceMonthly    Float    @map("price_monthly")
   priceYearly     Float    @map("price_yearly")
-  features        String[]
+  features        String   // Replaced String[]
   isActive        Boolean  @default(true) @map("is_active")
   stripePriceId   String?  @map("stripe_price_id")
   createdAt       DateTime @default(now()) @map("created_at")
@@ -66,7 +66,7 @@ model CreditTransaction {
   userId         String   @map("user_id")
   endpoint       String
   creditsUsed    Int      @map("credits_used")
-  requestData    Json     @map("request_data")
+  requestData    String   @map("request_data") // Replaced Json
   responseStatus String   @map("response_status")
   ipAddress      String?  @map("ip_address")
   userAgent      String?  @map("user_agent")
@@ -82,7 +82,7 @@ model Subscription {
   userId            String            @map("user_id")
   planId            String            @map("plan_id")
   stripeSubscriptionId String?        @map("stripe_subscription_id")
-  status            SubscriptionStatus @default(ACTIVE)
+  status            String            @default("ACTIVE") // Replaced enum SubscriptionStatus
   currentPeriodStart DateTime         @map("current_period_start")
   currentPeriodEnd   DateTime         @map("current_period_end")
   cancelAtPeriodEnd  Boolean          @default(false) @map("cancel_at_period_end")
@@ -95,22 +95,5 @@ model Subscription {
   @@map("subscriptions")
 }
 
-enum UserRole {
-  USER
-  ADMIN
-  SUPER_ADMIN
-}
-
-enum PlanType {
-  FREE
-  STARTER
-  PROFESSIONAL
-  ENTERPRISE
-}
-
-enum SubscriptionStatus {
-  ACTIVE
-  CANCELED
-  PAST_DUE
-  UNPAID
-}
+// Enums are not supported by SQLite, they are removed.
+// The fields using them have been changed to String.

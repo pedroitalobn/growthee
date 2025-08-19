@@ -9,18 +9,20 @@ const nextConfig = {
     return [
       {
         source: '/api/:path*',
-        destination: 'http://$$cap_appname-backend:8000/api/:path*',
+        destination: process.env.NEXT_PUBLIC_API_URL + '/api/:path*' || 'http://localhost:8000/api/:path*',
       },
       {
         source: '/health',
-        destination: 'http://$$cap_appname-backend:8000/health',
+        destination: process.env.NEXT_PUBLIC_API_URL + '/health' || 'http://localhost:8000/health',
       },
       {
         source: '/docs',
-        destination: 'http://$$cap_appname-backend:8000/docs',
+        destination: process.env.NEXT_PUBLIC_API_URL + '/docs' || 'http://localhost:8000/docs',
       },
     ];
   },
+  poweredByHeader: false,
+  compress: true,
 }
 
 module.exports = nextConfig

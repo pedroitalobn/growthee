@@ -3,11 +3,15 @@
 import { Inter } from 'next/font/google'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useState, useEffect } from 'react'
-import { useTheme } from 'next-themes'
+import { ThemeProvider } from 'next-themes'
 import './globals.css'
 import { Sidebar } from '@/components/ui/sidebar'
+import { useAuthStore } from '@/lib/store/auth-store'
+import { usePathname } from 'next/navigation'
 
 const inter = Inter({ subsets: ['latin'] })
+
+const publicPaths = ['/login', '/signup', '/billing']
 
 export default function RootLayout({
   children,
@@ -24,6 +28,16 @@ export default function RootLayout({
     },
   }))
 
+  const isAuthenticated = useAuthStore(state => state.isAuthenticated)
+  const checkAuth = useAuthStore(state => state.checkAuth)
+  const pathname = usePathname()
+
+  useEffect(() => {
+    checkAuth()
+  }, [checkAuth])
+
+  const isPublicPath = publicPaths.includes(pathname)
+
   return (
     <html lang="pt-BR" suppressHydrationWarning>
       <head>
@@ -31,14 +45,16 @@ export default function RootLayout({
         <meta name="description" content="Plataforma de enriquecimento de dados" />
       </head>
       <body className={inter.className}>
-        <QueryClientProvider client={queryClient}>
-          <div className="flex h-screen">
-            <Sidebar />
-            <main className="flex-1 overflow-auto">
-              {children}
-            </main>
-          </div>
-        </QueryClientProvider>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+          <QueryClientProvider client={queryClient}>
+            <div className="flex h-screen bg-background">
+              {isAuthenticated && !isPublicPath && <Sidebar />}
+              <main className={`flex-1 overflow-auto ${!isAuthenticated || isPublicPath ? 'w-full' : ''}`}>
+                {children}
+              </main>
+            </div>
+          </QueryClientProvider>
+        </ThemeProvider>
       </body>
     </html>
   )

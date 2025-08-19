@@ -1,31 +1,34 @@
 # Frontend Next.js
-# Try one of these more stable alternatives:
-FROM node:18-slim
-# or
-FROM node:20-alpine
-# or
-FROM node:lts-alpine
+FROM node:18-alpine AS builder
 
 WORKDIR /app
+
+# Instalar dependências necessárias para compilação
+RUN apk add --no-cache python3 make g++ git
 
 # Copiar package files
 COPY package*.json ./
 
 # Instalar dependências
-RUN npm ci --only=production
+RUN npm ci
 
 # Copiar código fonte
 COPY . .
 
-# Definir variáveis de ambiente para build
-ENV NEXT_PUBLIC_API_URL=http://localhost:8000
-ENV NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_placeholder
-
 # Build da aplicação
 RUN npm run build
+
+# Produção
+FROM node:18-alpine AS runner
+WORKDIR /app
+
+# Copiar arquivos do standalone
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
 
 # Expor porta
 EXPOSE 3000
 
 # Comando para iniciar
-CMD ["npm", "start"]
+CMD ["node", "server.js"]
