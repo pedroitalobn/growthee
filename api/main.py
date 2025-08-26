@@ -58,9 +58,20 @@ async def root():
 @app.post("/api/v1/enrich/company", response_model=CompanyResponse)
 async def enrich_company(request: CompanyRequest):
     try:
-        result = await company_enrichment_service.enrich_company(request.dict())
-        # Retornar diretamente os dados extraídos
-        return CompanyResponse(**result)
+        # From this:
+        # result = await company_enrichment_service.enrich_company(request.dict())
+        
+        # To this:
+        result = await company_enrichment_service.enrich_company(request.model_dump())
+        
+        # Extrair dados do campo enriched_data para o nível raiz da resposta
+        response_data = result.get("enriched_data", {})
+        # Adicionar outros campos relevantes
+        if "error" in result:
+            response_data["error"] = result["error"]
+            
+        # Retornar dados mapeados para o modelo de resposta
+        return CompanyResponse(**response_data)
     except Exception as e:
         logger.error(f"Validation error: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -71,7 +82,7 @@ async def enrich_person(request: PersonRequest):
         result = await person_enrichment_service.enrich_person(**request.dict())
         return PersonResponse(
             success=True,
-            data=result,
+            data=result,  # Corrigido
             message="Person enriched successfully"
         )
     except Exception as e:

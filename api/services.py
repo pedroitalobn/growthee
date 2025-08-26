@@ -18,6 +18,8 @@ from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler
 from crawl4ai.extraction_strategy import LLMExtractionStrategy
 from crawl4ai.chunking_strategy import RegexChunking
+from crawl4ai.types import ExtractionStrategy
+from crawl4ai.async_configs import LLMConfig
 
 from .log_service import LogService
 from .models import CompanyRequest, CompanyResponse, SocialMedia, Employee
@@ -102,29 +104,86 @@ class CrawlAIService:
         # Prioridade: DeepSeek > OpenAI > Anthropic > Ollama
         if os.getenv("DEEPSEEK_API_KEY"):
             return {
-                "provider": "openai/deepseek-chat",
+                "provider": "deepseek",
                 "api_token": os.getenv("DEEPSEEK_API_KEY"),
                 "base_url": "https://api.deepseek.com"
             }
         elif os.getenv("OPENAI_API_KEY"):
             return {
-                "provider": "openai/gpt-4o-mini",
+                "provider": "openai",
                 "api_token": os.getenv("OPENAI_API_KEY"),
                 "base_url": None
             }
         elif os.getenv("ANTHROPIC_API_KEY"):
             return {
-                "provider": "anthropic/claude-3-haiku-20240307",
+                "provider": "anthropic",
                 "api_token": os.getenv("ANTHROPIC_API_KEY"),
                 "base_url": None
             }
         else:
             # Fallback para Ollama local
             return {
-                "provider": "ollama/llama3.2",
+                "provider": "ollama",
                 "api_token": None,
                 "base_url": "http://localhost:11434"
             }
+            
+    def _get_llm_client(self, llm_config_data):
+        """Retorna um cliente LLM configurado para extração de texto"""
+        provider = llm_config_data["provider"]
+        api_token = llm_config_data["api_token"]
+        base_url = llm_config_data.get("base_url")
+        
+        # Verificar se os pacotes necessários estão instalados antes de tentar importar
+        try:
+            if provider == "openai" or provider == "deepseek":
+                # Tentar importar o pacote langchain_openai
+                try:
+                    from langchain_openai import ChatOpenAI
+                except ImportError:
+                    # Instalar o pacote automaticamente se não estiver disponível
+                    import subprocess
+                    import sys
+                    self.log_service.log_debug(f"Instalando pacote langchain_openai automaticamente", {"provider": provider})
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", "langchain-openai"])
+                    from langchain_openai import ChatOpenAI
+                
+                if provider == "openai":
+                    return ChatOpenAI(
+                        model_name="gpt-4-turbo",
+                        openai_api_key=api_token,
+                        temperature=0.1
+                    )
+                else:  # deepseek
+                    return ChatOpenAI(
+                        model_name="deepseek-chat",
+                        openai_api_key=api_token,
+                        openai_api_base=base_url,
+                        temperature=0.1
+                    )
+            elif provider == "anthropic":
+                # Tentar importar o pacote langchain_anthropic
+                try:
+                    from langchain_anthropic import ChatAnthropic
+                except ImportError:
+                    # Instalar o pacote automaticamente se não estiver disponível
+                    import subprocess
+                    import sys
+                    self.log_service.log_debug(f"Instalando pacote langchain_anthropic automaticamente", {"provider": provider})
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", "langchain-anthropic"])
+                    from langchain_anthropic import ChatAnthropic
+                    
+                return ChatAnthropic(
+                    model_name="claude-3-opus-20240229",
+                    anthropic_api_key=api_token,
+                    temperature=0.1
+                )
+            else:
+                raise ValueError(f"Unsupported LLM provider: {provider}")
+        except Exception as e:
+            self.log_service.log_debug(f"Error configuring LLM client: {str(e)}", {"provider": provider})
+            # Fallback para um método alternativo de extração que não depende de LLM
+            return None
         
     async def __aenter__(self):
         """Context manager para inicializar o crawler"""
@@ -137,6 +196,74 @@ class CrawlAIService:
         if self.crawler:
             await self.crawler.__aexit__(exc_type, exc_val, exc_tb)
     
+    async def _extract_json_from_markdown(self, markdown, schema):
+        """Extrai dados estruturados de markdown usando LLM"""
+        try:
+            llm_config_data = self._get_llm_config()
+            llm = self._get_llm_client(llm_config_data)
+            
+            if llm is None:
+                self.log_service.log_debug("LLM client not available for extraction", {})
+                return {}
+            
+            # Limitar o tamanho do markdown para não exceder limites de tokens
+            markdown_truncated = markdown[:15000] if len(markdown) > 15000 else markdown
+            
+            # Criar prompt para extração
+            prompt = f"""Extraia informações estruturadas sobre a empresa a partir do seguinte conteúdo de website:
+            
+            {markdown_truncated}
+            
+            Retorne apenas um objeto JSON válido seguindo este schema:
+            {json.dumps(schema, indent=2)}
+            
+            Não inclua explicações, apenas o JSON válido.
+            """
+            
+            # Usar o LLM para extrair JSON
+            from langchain_core.messages import HumanMessage, SystemMessage
+            
+            messages = [
+                SystemMessage(content="Você é um assistente especializado em extrair informações estruturadas de textos. Retorne apenas JSON válido sem explicações adicionais."),
+                HumanMessage(content=prompt)
+            ]
+            
+            # Usar ainvoke em vez de extract_json
+            response = await llm.ainvoke(messages)
+            content = response.content
+            
+            # Tentar extrair o JSON da resposta
+            import re
+            json_match = re.search(r'```json\s*(.+?)\s*```', content, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                json_str = content
+            
+            # Limpar e analisar o JSON
+            json_str = re.sub(r'^```json\s*|\s*```$', '', json_str.strip())
+            
+            # Tentar diferentes abordagens para extrair JSON válido
+            try:
+                extracted_data = json.loads(json_str)
+            except json.JSONDecodeError:
+                # Tentar encontrar qualquer objeto JSON na string
+                json_pattern = re.search(r'\{.*\}', json_str, re.DOTALL)
+                if json_pattern:
+                    try:
+                        extracted_data = json.loads(json_pattern.group(0))
+                    except:
+                        self.log_service.log_debug("Failed to parse JSON from LLM response", {"content": json_str[:200]})
+                        return {}
+                else:
+                    self.log_service.log_debug("No JSON found in LLM response", {"content": json_str[:200]})
+                    return {}
+            
+            return extracted_data
+        except Exception as e:
+            self.log_service.log_debug("JSON extraction from markdown failed", {"error": str(e)})
+            return {}
+    
     async def scrape_company_website(self, url: str) -> Dict[str, Any]:
         """Scraping avançado de website de empresa usando Crawl4AI"""
         try:
@@ -144,13 +271,15 @@ class CrawlAIService:
                 raise Exception("Crawler not initialized. Use async context manager.")
             
             # Obter configuração LLM dinâmica
-            llm_config = self._get_llm_config()
+            llm_config_data = self._get_llm_config()
             
             # Estratégia de extração LLM para dados de empresa
             extraction_strategy = LLMExtractionStrategy(
-                provider=llm_config["provider"],
-                api_token=llm_config["api_token"],
-                base_url=llm_config["base_url"],
+                llm_config=LLMConfig(
+                    provider=llm_config_data["provider"],
+                    api_token=llm_config_data["api_token"],
+                    base_url=llm_config_data["base_url"]
+                ),
                 schema={
                     "type": "object",
                     "properties": {
@@ -205,11 +334,22 @@ class CrawlAIService:
                 bypass_cache=True,
                 js_code=[
                     "window.scrollTo(0, document.body.scrollHeight);",  # Scroll para carregar conteúdo lazy
-                    "await new Promise(resolve => setTimeout(resolve, 2000));",  # Aguardar carregamento
+                    "await new Promise(resolve => setTimeout(resolve, 5000));",  # Aguardar carregamento
                 ],
                 wait_for="networkidle",
-                page_timeout=30000
+                page_timeout=60000
             )
+            
+            # Adicionar log de depuração detalhado sobre a execução do Crawl4AI
+            self.log_service.log_debug("Crawl4AI execution details", { 
+                "url": url, 
+                "success": result.success, 
+                "has_content": bool(result.extracted_content), 
+                "content_length": len(result.extracted_content) if result.extracted_content else 0, 
+                "has_markdown": bool(result.markdown), 
+                "markdown_length": len(result.markdown) if result.markdown else 0, 
+                "metadata": result.metadata 
+            })
             
             if result.success and result.extracted_content:
                 extracted_data = json.loads(result.extracted_content)
@@ -241,6 +381,73 @@ class CrawlAIService:
                 
                 return final_result
             else:
+                # Tentar extrair informações do markdown se disponível
+                if result.success and result.markdown:
+                    self.log_service.log_debug("Attempting to extract from markdown", {
+                        "url": url,
+                        "markdown_length": len(result.markdown)
+                    })
+                    
+                    # Usar o LLM para extrair informações do markdown
+                    try:
+                        llm_config_data = self._get_llm_config()
+                        llm_client = self._get_llm_client(llm_config_data)
+                        
+                        # Prompt para extrair informações do markdown
+                        prompt = f"""Extraia informações estruturadas sobre a empresa a partir do seguinte conteúdo de website:
+                        
+                        {result.markdown[:15000]}  # Limitar para não exceder tokens
+                        
+                        Retorne apenas um objeto JSON com os seguintes campos (deixe em branco se não encontrar):
+                        - company_name: nome da empresa
+                        - description: descrição da empresa
+                        - industry: setor/indústria
+                        - services: array de serviços oferecidos
+                        - products: array de produtos oferecidos
+                        - contact_info: objeto com email, phone, address
+                        - social_media: objeto com linkedin, twitter, facebook, instagram
+                        - team_size: tamanho da equipe
+                        - founded_year: ano de fundação
+                        - headquarters: sede da empresa
+                        """
+                        
+                        # Chamar o LLM para extrair informações
+                        extracted_json = await llm_client.extract_json(prompt)
+                        
+                        if extracted_json:
+                            # Adicionar metadados
+                            crawl_metadata = {
+                                "url": url,
+                                "title": result.metadata.get("title", ""),
+                                "description": result.metadata.get("description", ""),
+                                "keywords": result.metadata.get("keywords", []),
+                                "crawl_timestamp": datetime.now().isoformat(),
+                                "content_length": len(result.markdown) if result.markdown else 0,
+                                "extraction_method": "crawl4ai_markdown_fallback"
+                            }
+                            
+                            # Combinar dados extraídos com metadados
+                            final_result = {
+                                **extracted_json,
+                                "_metadata": crawl_metadata,
+                                "raw_markdown": result.markdown[:5000] if result.markdown else "",
+                                "quality_score": self._assess_extraction_quality(extracted_json)
+                            }
+                            
+                            self.log_service.log_debug("Markdown extraction successful", {
+                                "url": url,
+                                "extracted_fields": list(extracted_json.keys()),
+                                "quality_score": final_result["quality_score"]
+                            })
+                            
+                            return final_result
+                    except Exception as e:
+                        self.log_service.log_debug("Markdown extraction failed", {
+                            "url": url,
+                            "error": str(e)
+                        })
+                
+                # Se tudo falhar, retornar erro
                 self.log_service.log_debug("Crawl4AI extraction failed", {
                     "url": url,
                     "error": result.error_message if hasattr(result, 'error_message') else "Unknown error"
@@ -261,12 +468,12 @@ class CrawlAIService:
                 raise Exception("Crawler not initialized. Use async context manager.")
             
             # Obter configuração LLM dinâmica
-            llm_config = self._get_llm_config()
+            llm_config_data = self._get_llm_config()
             
             extraction_strategy = LLMExtractionStrategy(
-                provider=llm_config["provider"],
-                api_token=llm_config["api_token"],
-                base_url=llm_config["base_url"],
+                provider=llm_config_data["provider"],
+                api_token=llm_config_data["api_token"],
+                base_url=llm_config_data["base_url"],
                 schema={
                     "type": "object",
                     "properties": {
@@ -309,8 +516,19 @@ class CrawlAIService:
                     "await new Promise(resolve => setTimeout(resolve, 2000));"
                 ],
                 wait_for="networkidle",
-                page_timeout=30000
+                page_timeout=60000
             )
+            
+            # Adicionar log de depuração detalhado sobre a execução do Crawl4AI
+            self.log_service.log_debug("Crawl4AI execution details", { 
+                "url": url, 
+                "success": result.success, 
+                "has_content": bool(result.extracted_content), 
+                "content_length": len(result.extracted_content) if result.extracted_content else 0, 
+                "has_markdown": bool(result.markdown), 
+                "markdown_length": len(result.markdown) if result.markdown else 0, 
+                "metadata": result.metadata 
+            })
             
             if result.success and result.extracted_content:
                 extracted_data = json.loads(result.extracted_content)
@@ -395,9 +613,20 @@ class CrawlAIService:
                     "await new Promise(resolve => setTimeout(resolve, 2000));"
                 ],
                 wait_for="networkidle",
-                page_timeout=45000,
+                page_timeout=60000,
                 user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
+            
+            # Adicionar log de depuração detalhado sobre a execução do Crawl4AI
+            self.log_service.log_debug("Crawl4AI execution details", { 
+                "url": linkedin_url, 
+                "success": result.success, 
+                "has_content": bool(result.extracted_content), 
+                "content_length": len(result.extracted_content) if result.extracted_content else 0, 
+                "has_markdown": bool(result.markdown), 
+                "markdown_length": len(result.markdown) if result.markdown else 0, 
+                "metadata": result.metadata 
+            })
             
             if result.success and result.extracted_content:
                 extracted_data = json.loads(result.extracted_content)
@@ -433,12 +662,14 @@ class CrawlAIService:
                 raise Exception("Crawler not initialized. Use async context manager.")
             
             # Obter configuração LLM dinâmica
-            llm_config = self._get_llm_config()
+            llm_config_data = self._get_llm_config()
             
             extraction_strategy = LLMExtractionStrategy(
-                provider=llm_config["provider"],
-                api_token=llm_config["api_token"],
-                base_url=llm_config["base_url"],
+                llm_config=LLMConfig(
+                    provider=llm_config_data["provider"],
+                    api_token=llm_config_data["api_token"],
+                    base_url=llm_config_data["base_url"]
+                ),
                 schema={
                     "type": "object",
                     "properties": {
@@ -477,9 +708,20 @@ class CrawlAIService:
                     "await new Promise(resolve => setTimeout(resolve, 2000));"
                 ],
                 wait_for="networkidle",
-                page_timeout=30000,
+                page_timeout=60000,
                 user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
+            
+            # Adicionar log de depuração detalhado sobre a execução do Crawl4AI
+            self.log_service.log_debug("Crawl4AI execution details", { 
+                "url": linkedin_url, 
+                "success": result.success, 
+                "has_content": bool(result.extracted_content), 
+                "content_length": len(result.extracted_content) if result.extracted_content else 0, 
+                "has_markdown": bool(result.markdown), 
+                "markdown_length": len(result.markdown) if result.markdown else 0, 
+                "metadata": result.metadata 
+            })
             
             if result.success and result.extracted_content:
                 extracted_data = json.loads(result.extracted_content)
@@ -513,11 +755,14 @@ class CrawlAIService:
     async def find_linkedin_on_website(self, website_url: str) -> Optional[str]:
         """Busca URLs do LinkedIn em websites usando CrawlAI com LLM"""
         try:
-            llm_config = self._get_llm_config()
+            llm_config_data = self._get_llm_config()
             
             extraction_strategy = LLMExtractionStrategy(
-                provider=llm_config["provider"],
-                api_token=llm_config["api_token"],
+                llm_config=LLMConfig(
+                    provider=llm_config_data["provider"],
+                    api_token=llm_config_data["api_token"],
+                    base_url=llm_config_data["base_url"]
+                ),
                 schema={
                     "type": "object",
                     "properties": {
@@ -575,11 +820,14 @@ class CrawlAIService:
     async def extract_company_data_from_html(self, html_content: str, url: str = None) -> Dict[str, Any]:
         """Extrai dados da empresa de conteúdo HTML usando LLM"""
         try:
-            llm_config = self._get_llm_config()
+            llm_config_data = self._get_llm_config()
             
             extraction_strategy = LLMExtractionStrategy(
-                provider=llm_config["provider"],
-                api_token=llm_config["api_token"],
+                llm_config=LLMConfig(
+                    provider=llm_config_data["provider"],
+                    api_token=llm_config_data["api_token"],
+                    base_url=llm_config_data["base_url"]
+                ),
                 schema={
                     "type": "object",
                     "properties": {
@@ -718,6 +966,17 @@ class CrawlAIService:
                     extraction_strategy=extraction_strategy,
                     bypass_cache=True
                 )
+                
+                # Adicionar log de depuração detalhado sobre a execução do Crawl4AI
+                self.log_service.log_debug("Crawl4AI execution details", { 
+                    "url": website_url, 
+                    "success": result.success, 
+                    "has_content": bool(result.extracted_content), 
+                    "content_length": len(result.extracted_content) if result.extracted_content else 0, 
+                    "has_markdown": bool(result.markdown), 
+                    "markdown_length": len(result.markdown) if result.markdown else 0, 
+                    "metadata": result.metadata 
+                })
                 
                 if result.success and result.extracted_content:
                     try:
@@ -978,79 +1237,286 @@ class CompanyEnrichmentService:
         # Inicializar CrawlAI service
         self.crawl4ai_service = CrawlAIService(log_service)
 
-    async def enrich_company(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """Enriquecimento principal usando apenas CrawlAI e Firecrawl"""
+    async def enrich_company(self, company_data: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Enriquece os dados de uma empresa, orquestrando a busca e o scraping"""
+        domain = company_data.get("domain")
+        if not domain:
+            raise ValueError("O domínio da empresa é obrigatório")
+
+        schema = company_data.get("schema", self._get_default_schema())
+        
         try:
-            company_data = request.copy()
-            result = {"enriched_data": {}, "sources_used": [], "confidence_score": 0.0}
-            
-            # Estratégia 1: Enriquecimento por LinkedIn URL (se disponível)
-            if company_data.get("linkedin_url"):
-                linkedin_result = await self._enrich_by_linkedin_crawlai(company_data)
-                if linkedin_result and linkedin_result.get("name"):
-                    result["enriched_data"].update(linkedin_result)
-                    result["sources_used"].append("linkedin_crawlai")
-                    self.log_service.log_debug("LinkedIn enrichment successful", {
-                        "company": linkedin_result.get("name", "Unknown")
-                    })
-            
-            # Estratégia 2: Enriquecimento por domínio/website
-            if company_data.get("domain") or company_data.get("website"):
-                domain_result = await self._enrich_by_domain_crawlai_firecrawl(company_data)
-                if domain_result:
-                    # Merge com dados existentes
-                    for key, value in domain_result.items():
-                        if key not in result["enriched_data"] or not result["enriched_data"][key]:
-                            result["enriched_data"][key] = value
-                    
-                    if domain_result.get("_sources"):
-                        result["sources_used"].extend(domain_result["_sources"])
-            
-            # Estratégia 3: Busca com Brave Search (fallback)
-            if not result["enriched_data"].get("name") and company_data.get("name"):
-                brave_result = await self._search_company_with_brave(
-                    company_data["name"],
-                    region=company_data.get("region"),
-                    country=company_data.get("country")
+            async with CrawlAIService(log_service=self.log_service) as crawler:
+                scraped_data = await self.scrape_company_website(
+                    crawler,
+                    domain,
+                    schema,
+                    user_id
                 )
-                if brave_result and brave_result.get("name"):
-                    # Merge dados do Brave Search
-                    for key, value in brave_result.items():
-                        if key not in result["enriched_data"] or not result["enriched_data"][key]:
-                            result["enriched_data"][key] = value
-                    result["sources_used"].append("brave_search")
-            
-            # Calcular score de confiança
-            result["confidence_score"] = self._calculate_overall_confidence(
-                result["enriched_data"], 
-                result["sources_used"]
-            )
-            
-            # Remover metadados internos
-            if "_sources" in result["enriched_data"]:
-                del result["enriched_data"]["_sources"]
-            
-            return result
-            
+            # Estruturar o retorno com o campo enriched_data esperado pela API
+            return {
+                "enriched_data": scraped_data,
+                "domain": domain,
+                "status": "success"
+            }
         except Exception as e:
-            self.log_service.log_debug("Company enrichment error", {"error": str(e)})
+            self.log_service.log_debug(f"Erro no enriquecimento do domínio {domain}: {e}", {"domain": domain, "user_id": user_id})
             return {
                 "enriched_data": {},
-                "sources_used": [],
-                "confidence_score": 0.0,
-                "error": str(e)
+                "domain": domain,
+                "status": "error",
+                "error": f"Falha no enriquecimento: {e}"
             }
 
-    async def _safe_extract_text_async(self, page: Page, selector: str) -> Optional[str]:
-        """Extrai texto de forma segura usando Playwright"""
+    def _get_default_schema(self) -> Dict[str, Any]:
+        """Retorna o schema padrão para enriquecimento de empresas"""
+        return {
+            "name": "string",
+            "description": "string",
+            "industry": "string",
+            "size": "string",
+            "founded": "string",
+            "headquarters": "string",
+            "website": "string",
+            "linkedin": "string",
+            "employees": "array",
+            "social_media": "array"
+        }
+    
+    async def _extract_json_from_markdown(self, markdown: str, schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Extrai dados estruturados de markdown usando LLM"""
         try:
-            element = await page.query_selector(selector)
-            if element:
-                text = await element.inner_text()
-                return text.strip() if text and text.strip() not in ['Unknown', 'N/A', '-', ''] else None
-        except:
-            pass
-        return None
+            # Usar DeepSeek como configurado no sistema
+            import httpx
+            
+            deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+            if not deepseek_api_key:
+                self.log_service.log_debug("DeepSeek API key not found")
+                return {}
+            
+            # Limitar o tamanho do markdown para não exceder limites de tokens
+            markdown_truncated = markdown[:15000] if len(markdown) > 15000 else markdown
+            
+            # Criar prompt para extração
+            prompt = f"""Extraia informações estruturadas sobre a empresa a partir do seguinte conteúdo de website:
+            
+            {markdown_truncated}
+            
+            Retorne apenas um objeto JSON válido seguindo este schema:
+            {json.dumps(schema, indent=2)}
+            
+            Não inclua explicações, apenas o JSON válido.
+            """
+            
+            # Fazer requisição para DeepSeek
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://api.deepseek.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {deepseek_api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "deepseek-chat",
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "Você é um assistente especializado em extrair informações estruturadas de textos. Retorne apenas JSON válido sem explicações adicionais."
+                            },
+                            {
+                                "role": "user",
+                                "content": prompt
+                            }
+                        ],
+                        "temperature": 0
+                    },
+                    timeout=30.0
+                )
+            
+            if response.status_code != 200:
+                self.log_service.log_debug("DeepSeek API error", {"status_code": response.status_code})
+                return {}
+            
+            result = response.json()
+            content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+            
+            # Tentar extrair o JSON da resposta
+            import re
+            json_match = re.search(r'```json\s*(.+?)\s*```', content, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                json_str = content
+            
+            # Limpar e analisar o JSON
+            json_str = re.sub(r'^```json\s*|\s*```$', '', json_str.strip())
+            
+            # Tentar diferentes abordagens para extrair JSON válido
+            try:
+                extracted_data = json.loads(json_str)
+            except json.JSONDecodeError:
+                # Tentar encontrar qualquer objeto JSON na string
+                json_pattern = re.search(r'\{.*\}', json_str, re.DOTALL)
+                if json_pattern:
+                    try:
+                        extracted_data = json.loads(json_pattern.group(0))
+                    except:
+                        self.log_service.log_debug("Failed to parse JSON from LLM response", {"content": json_str[:200]})
+                        return {}
+                else:
+                    self.log_service.log_debug("No JSON found in LLM response", {"content": json_str[:200]})
+                    return {}
+            
+            return extracted_data
+        except Exception as e:
+            self.log_service.log_debug("JSON extraction from markdown failed", {"error": str(e)})
+            return {}
+
+    def _map_data_to_schema(self, extracted_data: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Mapeia dados extraídos para o schema esperado"""
+        try:
+            if not extracted_data or not isinstance(extracted_data, dict):
+                return {}
+            
+            mapped_data = {}
+            # Verificar se o schema tem 'properties' ou se é um schema simples
+            schema_properties = schema.get('properties', schema)
+            
+            # Mapear campos extraídos diretamente para o schema
+            for extracted_field, extracted_value in extracted_data.items():
+                if extracted_field == '_metadata':
+                    continue
+                
+                # Verificar se o campo existe no schema
+                if extracted_field in schema_properties and extracted_value is not None:
+                    field_config = schema_properties[extracted_field]
+                    
+                    # Se field_config é uma string (schema simples), tratar como tipo
+                    if isinstance(field_config, str):
+                        field_type = field_config
+                    else:
+                        field_type = field_config.get('type', 'string')
+                    
+                    # Validar e converter o tipo se necessário
+                    if field_type == 'string' and not isinstance(extracted_value, str):
+                        mapped_data[extracted_field] = str(extracted_value)
+                    elif field_type == 'array' and not isinstance(extracted_value, list):
+                        # Tratamento especial para campos específicos
+                        if extracted_field == 'employees':
+                            # Converter employees para lista de dicionários
+                            if isinstance(extracted_value, dict):
+                                mapped_data[extracted_field] = [extracted_value]
+                            elif isinstance(extracted_value, str):
+                                try:
+                                    # Tentar parsear como JSON
+                                    import json
+                                    parsed = json.loads(extracted_value)
+                                    if isinstance(parsed, dict):
+                                        mapped_data[extracted_field] = [parsed]
+                                    elif isinstance(parsed, list):
+                                        mapped_data[extracted_field] = parsed
+                                    else:
+                                        mapped_data[extracted_field] = []
+                                except:
+                                    mapped_data[extracted_field] = []
+                            else:
+                                mapped_data[extracted_field] = []
+                        elif extracted_field == 'social_media':
+                            # Converter social_media para lista de dicionários
+                            if isinstance(extracted_value, dict):
+                                # Converter dict de plataformas para lista
+                                social_list = []
+                                for platform, url in extracted_value.items():
+                                    if url and url.strip():
+                                        social_list.append({
+                                            "platform": platform,
+                                            "url": url.strip()
+                                        })
+                                mapped_data[extracted_field] = social_list
+                            elif isinstance(extracted_value, str):
+                                try:
+                                    import json
+                                    parsed = json.loads(extracted_value)
+                                    if isinstance(parsed, dict):
+                                        social_list = []
+                                        for platform, url in parsed.items():
+                                            if url and url.strip():
+                                                social_list.append({
+                                                    "platform": platform,
+                                                    "url": url.strip()
+                                                })
+                                        mapped_data[extracted_field] = social_list
+                                    else:
+                                        mapped_data[extracted_field] = []
+                                except:
+                                    mapped_data[extracted_field] = []
+                            else:
+                                mapped_data[extracted_field] = []
+                        else:
+                            # Tratamento padrão para arrays
+                            if isinstance(extracted_value, str):
+                                mapped_data[extracted_field] = [item.strip() for item in extracted_value.split(',') if item.strip()]
+                            else:
+                                mapped_data[extracted_field] = [str(extracted_value)]
+                    elif field_type == 'object' and not isinstance(extracted_value, dict):
+                        # Se não é objeto, criar um objeto básico
+                        mapped_data[extracted_field] = {"value": str(extracted_value)}
+                    else:
+                        mapped_data[extracted_field] = extracted_value
+            
+            # Adicionar metadados de qualidade
+            mapped_data['_metadata'] = {
+                'extraction_timestamp': datetime.now().isoformat(),
+                'fields_extracted': len(mapped_data),
+                'schema_fields': len(schema_properties),
+                'completion_rate': len(mapped_data) / len(schema_properties) if schema_properties else 0
+            }
+            
+            return mapped_data
+            
+        except Exception as e:
+            self.log_service.log_debug("Error mapping data to schema", {
+                "error": str(e),
+                "extracted_data_keys": list(extracted_data.keys()) if isinstance(extracted_data, dict) else "not_dict"
+            })
+            return {}
+
+    async def scrape_company_website(self, crawler: CrawlAIService, domain: str, schema: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Raspa o site da empresa para extrair informações detalhadas com base em um schema"""
+        try:
+            from crawl4ai.async_configs import LLMConfig
+            
+            llm_config = LLMConfig(
+                provider="openai",
+                api_token=os.getenv("OPENAI_API_KEY")
+            )
+            
+            # Corrigir o parâmetro de 'domain' para 'url'
+            result = await crawler.crawler.arun(
+                url=f"https://{domain}",
+                extraction_strategy=LLMExtractionStrategy(
+                    llm_config=llm_config,
+                    instruction=f"Extract company information according to this schema: {schema}"
+                )
+            )
+            
+            if result and result.extracted_content:
+                self.log_service.log_debug("CrawlAI extraction successful", {"domain": domain})
+                try:
+                    extracted_data = json.loads(result.extracted_content)
+                    return self._map_data_to_schema(extracted_data, schema)
+                except json.JSONDecodeError:
+                    self.log_service.log_debug("CrawlAI returned invalid JSON, falling back to Firecrawl", {"domain": domain})
+                    return await self._scrape_with_firecrawl(f"https://{domain}", schema, user_id)
+            else:
+                self.log_service.log_debug("CrawlAI returned no data, falling back to Firecrawl", {"domain": domain})
+                return await self._scrape_with_firecrawl(f"https://{domain}", schema, user_id)
+                
+        except Exception as e:
+            self.log_service.log_debug("CrawlAI extraction failed, falling back to Firecrawl", {"domain": domain, "error": str(e)})
+            return await self._scrape_with_firecrawl(f"https://{domain}", schema, user_id)
+
+
         
     def _safe_extract_text_from_html(self, html_content: str, selectors: List[str]) -> Optional[str]:
         """Extrai texto de forma segura usando seletores CSS em HTML"""
@@ -1237,45 +1703,40 @@ class CompanyEnrichmentService:
         
         return None
             
-    async def _find_linkedin_on_website_firecrawl(self, website_url: str) -> Optional[str]:
-        """Busca URLs do LinkedIn usando Firecrawl"""
+    async def _find_linkedin_url_on_page(self, markdown_content: str) -> Optional[str]:
+        """Encontra uma URL do LinkedIn no conteúdo markdown de uma página."""
+        # Regex para encontrar URLs do LinkedIn de forma mais robusta
+        linkedin_pattern = re.compile(r'https?://(?:www\.)?linkedin\.com/company/[a-zA-Z0-9_-]+')
+        match = linkedin_pattern.search(markdown_content)
+        
+        if match:
+            linkedin_url = match.group(0)
+            self.log_service.log_debug("LinkedIn URL found on page", {"url": linkedin_url})
+            return linkedin_url
+        
+        return None
+
+    async def _find_linkedin_on_website_firecrawl(self, url: str) -> Optional[str]:
+        """Usa o Firecrawl para encontrar um link do LinkedIn em um site, com fallback para LLM."""
         try:
-            firecrawl = FirecrawlApp(api_key=os.getenv('FIRECRAWL_API_KEY'))
+            # Schema para extrair apenas a URL do LinkedIn
+            linkedin_schema = {
+                "type": "object",
+                "properties": {
+                    "linkedin_url": {"type": "string", "description": "URL do perfil da empresa no LinkedIn"}
+                },
+                "required": ["linkedin_url"]
+            }
             
-            # Scraping com Firecrawl
-            scrape_result = firecrawl.scrape_url(
-                website_url,
-                params={
-                    'formats': ['markdown', 'links'],
-                    'includeTags': ['a'],
-                    'excludeTags': ['script', 'style'],
-                    'timeout': 15000
-                }
-            )
-            
-            if scrape_result.get('success') and scrape_result.get('data'):
-                # Buscar links do LinkedIn
-                links = scrape_result['data'].get('links', [])
-                
-                for link in links:
-                    href = link.get('href', '')
-                    if 'linkedin.com/company/' in href:
-                        return href
-                
-                # Buscar no markdown também
-                markdown = scrape_result['data'].get('markdown', '')
-                linkedin_pattern = r'https?://(?:www\.)?linkedin\.com/company/[\w-]+/?'
-                matches = re.findall(linkedin_pattern, markdown)
-                if matches:
-                    return matches[0]
+            # Chamar o _scrape_with_firecrawl com o schema
+            scraped_data = await self._scrape_with_firecrawl(url, linkedin_schema)
+
+            if scraped_data and "linkedin_url" in scraped_data:
+                return scraped_data["linkedin_url"]
             
             return None
-            
         except Exception as e:
-            self.log_service.log_debug("Error finding LinkedIn with Firecrawl", {
-                "url": website_url,
-                "error": str(e)
-            })
+            self.log_service.log_debug("Error finding LinkedIn with Firecrawl", {"url": url, "error": str(e)})
             return None
 
     async def _add_website_enrichment(self, result: Dict[str, Any], company_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1297,130 +1758,38 @@ class CompanyEnrichmentService:
             return result
 
     def _parse_linkedin_markdown(self, markdown_content: str) -> Dict[str, Any]:
-        """Parse aprimorado de markdown content do LinkedIn"""
+        """Analisa o conteúdo markdown de uma página de empresa do LinkedIn."""
         try:
-            import re
-            
-            result = {}
-            
-            # Extrair nome da empresa (primeiro h1 ou título principal)
-            name_patterns = [
-                r'^#\s+(.+)$',
-                r'# (.+?)\n',
-                r'## (.+?)\n',
-                r'\*\*(.+?)\*\*.*(?:followers|employees)',
-                r'^(.+?)\n[=\-]+\n',  # Formato alternativo de título
-                r'<h1[^>]*>([^<]+)</h1>',  # Tag HTML h1
-                r'Company:\s*(.+?)(?=\n|$)'  # Formato "Company: Nome"
-            ]
-            
-            for pattern in name_patterns:
-                name_match = re.search(pattern, markdown_content, re.MULTILINE | re.IGNORECASE)
-                if name_match:
-                    result['name'] = name_match.group(1).strip()
-                    break
-            
-            # Extrair descrição (múltiplos padrões)
-            desc_patterns = [
-                r'(?:About|Overview|Description)\s*\n+(.+?)(?=\n#{1,3}|\n\n[A-Z]|$)',
-                r'## About\s*\n(.+?)(?=\n##|$)',
-                r'\*\*About\*\*\s*\n(.+?)(?=\n\*\*|$)',
-                r'(?:About|Overview|Description)[:\s]*\n?(.+?)(?=\n#|\n\*\*|\n\n[A-Z]|$)',  # Formato mais flexível
-                r'<p[^>]*>([^<]{30,})</p>',  # Parágrafos HTML longos (possível descrição)
-                r'(?<=\n\n)([^#\*\n][^\n]{50,})(?=\n\n)'  # Parágrafos longos sem formatação
-            ]
-            
-            for pattern in desc_patterns:
-                desc_match = re.search(pattern, markdown_content, re.DOTALL | re.IGNORECASE)
-                if desc_match:
-                    result['description'] = desc_match.group(1).strip()
-                    break
-            
-            # Extrair informações estruturadas
-            info_patterns = {
-                'industry': r'(?:Industry|Sector)[:\s]*(.+?)(?=\n|$)',
-                'size': r'(?:Company size|Employees|Size)[:\s]*(.+?)(?=\n|$)',
-                'headquarters': r'(?:Headquarters|Location|Based in|Address)[:\s]*(.+?)(?=\n|$)',
-                'founded': r'(?:Founded|Established|Since|Year)[:\s]*(\d{4})',
-                'website': r'(?:Website|Site|Web|URL)[:\s]*(.+?)(?=\n|$)',
-                'specialties': r'(?:Specialties|Expertise|Skills|Focus areas)[:\s]*(.+?)(?=\n|$)',
-                'followers': r'(\d+(?:,\d+)*(?:\.\d+)?[KMB]?)\s*(?:followers|seguidores)',
-                'employees': r'(\d+(?:,\d+)*(?:\.\d+)?[KMB]?)\s*(?:employees|funcionários|staff|people)',
-                'revenue': r'(?:Revenue|Annual revenue|Sales)[:\s]*(.+?)(?=\n|$)',
-                'type': r'(?:Company type|Type|Organization)[:\s]*(.+?)(?=\n|$)',
-                'funding': r'(?:Funding|Investment|Capital)[:\s]*(.+?)(?=\n|$)'
-            }
-            
-            for key, pattern in info_patterns.items():
-                match = re.search(pattern, markdown_content, re.IGNORECASE)
-                if match:
-                    result[key] = match.group(1).strip()
-            
-            # Extrair posts recentes
-            posts_pattern = r'(?:Recent|Latest)\s+(?:posts|updates|news|activity)\s*:?\s*\n(.+?)(?=\n\n|$)'
-            posts_match = re.search(posts_pattern, markdown_content, re.DOTALL | re.IGNORECASE)
-            if posts_match:
-                posts_text = posts_match.group(1)
-                result['recent_posts'] = [post.strip() for post in posts_text.split('\n') if post.strip()]
-            
-            # Extrair liderança/equipe
-            leadership_pattern = r'(?:Leadership|Team|Management|Key people)[:\s]*\n(.+?)(?=\n#|\n\*\*|$)'
-            leadership_match = re.search(leadership_pattern, markdown_content, re.DOTALL | re.IGNORECASE)
-            if leadership_match:
-                leadership_text = leadership_match.group(1)
-                # Tentar extrair nomes e cargos
-                leaders = []
-                for line in leadership_text.split('\n'):
-                    if line.strip():
-                        # Tentar identificar padrões de "Nome - Cargo" ou "Nome, Cargo"
-                        leader_match = re.search(r'([^,\-:]+)(?:[,\-:]\s*(.+))?', line.strip())
-                        if leader_match:
-                            name = leader_match.group(1).strip()
-                            title = leader_match.group(2).strip() if leader_match.group(2) else None
-                            leaders.append({'name': name, 'title': title})
-                if leaders:
-                    result['leadership'] = leaders
-            
-            # Extrair especialidades como lista se for uma string separada por vírgulas
-            if 'specialties' in result and ',' in result['specialties']:
-                result['specialties'] = [s.strip() for s in result['specialties'].split(',') if s.strip()]
-            
-            # Normalizar números (converter K, M, B para valores numéricos)
-            for key in ['followers', 'employees']:
-                if key in result:
-                    try:
-                        value = result[key].upper()
-                        multiplier = 1
-                        if 'K' in value:
-                            multiplier = 1000
-                            value = value.replace('K', '')
-                        elif 'M' in value:
-                            multiplier = 1000000
-                            value = value.replace('M', '')
-                        elif 'B' in value:
-                            multiplier = 1000000000
-                            value = value.replace('B', '')
-                        
-                        # Remover caracteres não numéricos exceto ponto decimal
-                        value = re.sub(r'[^0-9.]', '', value)
-                        result[key] = str(int(float(value) * multiplier))
-                    except:
-                        # Manter o valor original se a conversão falhar
-                        pass
+            lines = markdown_content.strip().split('\n')
+            mapped_data = {}
+
+            for line in lines:
+                if ":" in line:
+                    key, *value_parts = line.split(":", 1)
+                    key = key.strip().lower().replace(" ", "_")
+                    value = ":".join(value_parts).strip()
+
+                    if key in mapped_data:
+                        if isinstance(mapped_data[key], list):
+                            mapped_data[key].append(value)
+                        else:
+                            mapped_data[key] = [mapped_data[key], value]
+                    else:
+                        mapped_data[key] = value
             
             self.log_service.log_debug("Markdown parsing completed", {
-                "extracted_fields": list(result.keys()),
-                "quality": self._assess_data_quality(result)
+                "extracted_fields": list(mapped_data.keys()),
+                "quality": self._assess_data_quality(mapped_data)
             })
             
-            return result
+            return mapped_data
             
         except Exception as e:
             self.log_service.log_debug("Markdown parsing failed", {"error": str(e)})
             return {}
 
-    async def _scrape_with_firecrawl(self, url: str) -> Dict[str, Any]:
-        """Faz scraping de uma URL usando a API do Firecrawl com configuração otimizada."""
+    async def _scrape_with_firecrawl(self, url: str, schema: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Fallback para scraping com Firecrawl e extração com LLM"""
         if not self.firecrawl_api_key:
             self.log_service.log_debug("Firecrawl API key not configured.", {})
             return {"error": "Firecrawl not configured"}
@@ -1428,86 +1797,44 @@ class CompanyEnrichmentService:
         try:
             app = FirecrawlApp(api_key=self.firecrawl_api_key)
             
-            # Configuração otimizada para LinkedIn
-            scrape_options = {
-                'formats': ['markdown', 'html'],
-                'includeTags': ['h1', 'h2', 'h3', 'p', 'div', 'span', 'a', 'section'],
-                'excludeTags': ['script', 'style', 'nav', 'footer', 'header'],
-                'waitFor': 3000,
-                'extractorOptions': {
-                    'mode': 'llm-extraction',
-                    'extractionPrompt': '''Extract comprehensive company information from this LinkedIn company page:
-                    
-                    REQUIRED FIELDS:
-                    - Company name (exact name as shown)
-                    - Description/About section (full text)
-                    - Industry/Sector
-                    - Company size (number of employees)
-                    - Headquarters/Location
-                    - Founded year
-                    - Website URL
-                    - Specialties (comma-separated)
-                    - Follower count
-                    - Employee count on LinkedIn
-                    
-                    ADDITIONAL FIELDS (if available):
-                    - Recent posts/updates (last 3)
-                    - Key executives/leadership
-                    - Company type (Public, Private, etc.)
-                    - Revenue information
-                    - Funding information
-                    - Associated organizations
-                    
-                    Return as clean JSON with these exact keys: name, description, industry, size, headquarters, founded, website, specialties, followers, employees, recent_posts, leadership, company_type, revenue, funding, associated_orgs''',
-                    'extractionSchema': {
-                        'type': 'object',
-                        'properties': {
-                            'name': {'type': 'string'},
-                            'description': {'type': 'string'},
-                            'industry': {'type': 'string'},
-                            'size': {'type': 'string'},
-                            'headquarters': {'type': 'string'},
-                            'founded': {'type': 'string'},
-                            'website': {'type': 'string'},
-                            'specialties': {'type': 'string'},
-                            'followers': {'type': 'string'},
-                            'employees': {'type': 'string'},
-                            'recent_posts': {'type': 'array', 'items': {'type': 'string'}},
-                            'leadership': {'type': 'array', 'items': {'type': 'string'}},
-                            'company_type': {'type': 'string'},
-                            'revenue': {'type': 'string'},
-                            'funding': {'type': 'string'},
-                            'associated_orgs': {'type': 'array', 'items': {'type': 'string'}}
-                        }
-                    }
-                }
-            }
-            
             self.log_service.log_debug("Starting Firecrawl scraping with enhanced config", {"url": url})
-            scraped_data = app.scrape_url(url, scrape_options)
             
-            if scraped_data and 'llm_extraction' in scraped_data:
-                extracted = scraped_data['llm_extraction']
-                self.log_service.log_debug("Firecrawl extraction successful", {
-                    "url": url, 
-                    "extracted_keys": list(extracted.keys()),
-                    "data_quality": self._assess_data_quality(extracted)
+            scraped_data = app.scrape_url(url)
+            
+            # Acessar markdown corretamente do objeto ScrapeResponse
+            markdown_content = None
+            if hasattr(scraped_data, 'markdown'):
+                markdown_content = scraped_data.markdown
+            elif isinstance(scraped_data, dict):
+                markdown_content = scraped_data.get('markdown')
+
+            if not markdown_content:
+                self.log_service.log_debug("Firecrawl response has no markdown content", {
+                    "url": url,
+                    "response_type": str(type(scraped_data)),
+                    "has_markdown_attr": hasattr(scraped_data, 'markdown'),
+                    "markdown_length": len(markdown_content) if markdown_content else 0
                 })
-                return extracted
-            elif scraped_data and 'markdown' in scraped_data:
-                # Fallback para markdown se LLM extraction falhar
-                self.log_service.log_debug("Using markdown fallback", {"url": url})
-                return self._parse_linkedin_markdown(scraped_data['markdown'])
-            else:
-                self.log_service.log_debug("Firecrawl did not return structured data.", {
-                    "url": url, 
-                    "available_keys": list(scraped_data.keys()) if scraped_data else []
-                })
-                return {}
-                
+                return {"error": "No markdown content from Firecrawl"}
+            
+            extracted = await self._extract_json_from_markdown(markdown_content, schema)
+            
+            if not extracted:
+                self.log_service.log_debug("Markdown extraction with LLM returned no data", {"url": url})
+                return {"error": "Failed to extract data from markdown"}
+
+            mapped_data = self._map_data_to_schema(extracted, schema)
+            
+            self.log_service.log_debug("Firecrawl markdown extraction successful", {
+                "url": url, 
+                "extracted_keys": list(mapped_data.keys()) if mapped_data else [],
+                "data_quality": self._assess_data_quality(mapped_data) if mapped_data else 0
+            })
+            return mapped_data
+            
         except Exception as e:
             self.log_service.log_debug("Firecrawl scraping failed", {"url": url, "error": str(e)})
-            return {"error": str(e)}
+            return {"error": f"Failed to scrape with Firecrawl: {e}"}
 
     async def _scrape_linkedin_company(self, linkedin_url: str) -> Dict[str, Any]:
         """Faz scraping de dados da empresa no LinkedIn usando Firecrawl."""
@@ -1524,8 +1851,8 @@ class CompanyEnrichmentService:
         company_data['confidence_score'] = self._calculate_company_confidence_score(company_data)
         return company_data
         
-    async def _scrape_linkedin_company_with_retry(self, linkedin_url: str, max_retries: int = 2) -> Dict[str, Any]:
-        """Scraping do LinkedIn com retry logic"""
+    async def _scrape_linkedin_company_with_retry(self, linkedin_url: str, max_retries: int = 3) -> Dict[str, Any]:
+        """Tenta fazer o scraping de uma página do LinkedIn com várias tentativas e timeouts."""
         for attempt in range(max_retries + 1):
             try:
                 self.log_service.log_debug(f"LinkedIn scraping attempt {attempt + 1}", {"url": linkedin_url})
@@ -1696,26 +2023,27 @@ class CompanyEnrichmentService:
         return self._safe_extract_text_from_html(html_content, selectors)
 
     async def _resolve_linkedin_redirect(self, linkedin_url: str) -> str:
-        """Resolve redirecionamentos do LinkedIn"""
+        """Resolve redirecionamentos do LinkedIn usando requests"""
         try:
             # Se já é uma URL completa do LinkedIn, retorna como está
             if 'linkedin.com/company/' in linkedin_url:
                 return linkedin_url
             
-            # Se é um redirecionamento, tenta resolver
+            # Se é um redirecionamento, tenta resolver usando requests
             if 'linkedin.com' in linkedin_url and '/redir/' in linkedin_url:
-                async with async_playwright() as p:
-                    browser = await p.chromium.launch(headless=True)
-                    page = await browser.new_page()
-                    
-                    try:
-                        response = await page.goto(linkedin_url, wait_until='networkidle', timeout=10000)
-                        final_url = page.url
-                        await browser.close()
-                        return final_url
-                    except:
-                        await browser.close()
-                        return linkedin_url
+                try:
+                    response = requests.get(
+                        linkedin_url, 
+                        allow_redirects=True, 
+                        timeout=10,
+                        headers={
+                            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                        }
+                    )
+                    return response.url
+                except Exception as e:
+                    self.log_service.log_debug("Error resolving LinkedIn redirect with requests", {"error": str(e)})
+                    return linkedin_url
             
             return linkedin_url
             
@@ -1786,87 +2114,9 @@ class CompanyEnrichmentService:
             'error': error or 'Unknown error during extraction'
         }
 
-    async def _extract_company_data(self, page: Page) -> Dict[str, Any]:
-        """Extrai dados da empresa do LinkedIn (método alternativo)"""
-        try:
-            # Nome da empresa
-            name = await self._safe_extract_text_async(page, 'h1[data-test-id="org-name"]') or \
-                   await self._safe_extract_text_async(page, 'h1.org-top-card-summary__title') or \
-                   await self._safe_extract_text_async(page, 'h1.top-card-layout__title') or \
-                   await self._safe_extract_text_async(page, 'h1')
-            
-            # Descrição
-            description = await self._safe_extract_text_async(page, '[data-test-id="about-us__description"]') or \
-                         await self._safe_extract_text_async(page, '.org-about-us-organization-description__text') or \
-                         await self._safe_extract_text_async(page, '.break-words p')
-            
-            # Indústria
-            industry = await self._safe_extract_text_async(page, '[data-test-id="about-us__industry"]') or \
-                       await self._safe_extract_text_async(page, '.org-about-us-organization-description__industry')
-            
-            # Tamanho da empresa
-            size = await self._safe_extract_text_async(page, '[data-test-id="about-us__size"]') or \
-                   await self._safe_extract_text_async(page, '.org-about-us-organization-description__company-size')
-            
-            # Website
-            website = await self._safe_extract_attribute(page, 'a[data-test-id="about-us__website"]', 'href') or \
-                     await self._safe_extract_attribute(page, '.org-about-us-organization-description__website a', 'href')
-            
-            # Sede
-            headquarters = await self._safe_extract_text_async(page, '[data-test-id="about-us__headquarters"]') or \
-                          await self._safe_extract_text_async(page, '.org-about-us-organization-description__headquarters')
-            
-            # Ano de fundação
-            founded = await self._safe_extract_text_async(page, '[data-test-id="about-us__founded"]') or \
-                     await self._safe_extract_text_async(page, '.org-about-us-organization-description__founded')
-            
-            # Extrair apenas o ano se houver texto adicional
-            if founded:
-                import re
-                year_match = re.search(r'\b(19|20)\d{2}\b', founded)
-                if year_match:
-                    founded = year_match.group()
-            
-            # Calcular score de confiança
-            confidence_score = self._calculate_confidence_score([
-                name, description, industry, size, website, headquarters, founded
-            ])
-            
-            return {
-                'name': name or 'Unknown',
-                'description': description or '',
-                'industry': industry or '',
-                'size': size or '',
-                'website': website or '',
-                'headquarters': headquarters or '',
-                'founded': founded or '',
-                'confidence_score': confidence_score
-            }
-            
-        except Exception as e:
-            self.log_service.log_debug("Error extracting company data", {"error": str(e)})
-            return {
-                'name': 'Unknown',
-                'description': '',
-                'industry': '',
-                'size': '',
-                'website': '',
-                'headquarters': '',
-                'founded': '',
-                'confidence_score': 0.0,
-                'error': str(e)
-            }
 
-    async def _safe_extract_attribute(self, page: Page, selector: str, attribute: str) -> Optional[str]:
-        """Extrai atributo de forma segura usando Playwright"""
-        try:
-            element = await page.query_selector(selector)
-            if element:
-                attr_value = await element.get_attribute(attribute)
-                return attr_value.strip() if attr_value and attr_value.strip() not in ['Unknown', 'N/A', '-', ''] else None
-        except:
-            pass
-        return None
+
+
 
     async def _search_company_with_brave(self, search_term: str, region: Optional[str] = None, country: Optional[str] = None) -> Dict[str, Any]:
         """Busca empresa usando Brave Search com estratégias otimizadas"""
@@ -2212,55 +2462,7 @@ class CompanyEnrichmentService:
             'confidence_score': 0.0
         }
 
-    async def _extract_social_media_links(self, page: Page) -> dict:
-        """Extrai links de redes sociais da página"""
-        try:
-            social_media = []
-            
-            # Seletores para diferentes redes sociais
-            social_selectors = {
-                'linkedin': [
-                    'a[href*="linkedin.com"]',
-                    'a[href*="linkedin.com/company"]',
-                    'a[href*="linkedin.com/in"]'
-                ],
-                'twitter': [
-                    'a[href*="twitter.com"]',
-                    'a[href*="x.com"]'
-                ],
-                'facebook': [
-                    'a[href*="facebook.com"]',
-                    'a[href*="fb.com"]'
-                ],
-                'instagram': [
-                    'a[href*="instagram.com"]'
-                ]
-            }
-            
-            for platform, selectors in social_selectors.items():
-                for selector in selectors:
-                    try:
-                        elements = await page.query_selector_all(selector)
-                        for element in elements:
-                            href = await element.get_attribute('href')
-                            if href and href.startswith('http'):
-                                # Validar e limpar a URL
-                                cleaned_url = self._clean_social_url(href)
-                                if cleaned_url and cleaned_url not in [item['url'] for item in social_media]:
-                                    social_media.append({
-                                        'platform': platform,
-                                        'url': cleaned_url,
-                                        'followers': await self._extract_followers_count(element)
-                                    })
-                    except Exception as e:
-                        self.log_service.log_debug(f"Error with selector {selector}", {"error": str(e)})
-                        continue
-            
-            return {'social_media_extended': social_media}
-            
-        except Exception as e:
-            self.log_service.log_debug("Error extracting social media links", {"error": str(e)})
-            return []
+
     def _clean_social_url(self, url: str) -> Optional[str]:
         """Limpa e valida URLs de redes sociais"""
         try:
@@ -2312,244 +2514,17 @@ class CompanyEnrichmentService:
             self.log_service.log_debug("Error extracting followers count", {"error": str(e)})
             return None
 
-    async def _extract_company_history(self, page: Page) -> dict:
-        """Extrai história da empresa"""
-        try:
-            history_selectors = [
-                'section[id*="historia"]',
-                'section[id*="history"]',
-                'div[class*="historia"]',
-                'div[class*="history"]',
-                'section[id*="sobre"]',
-                'section[id*="about"]',
-                'div[class*="about"]',
-                '.company-history',
-                '.nossa-historia',
-                '.our-story'
-            ]
-            
-            for selector in history_selectors:
-                try:
-                    element = await page.query_selector(selector)
-                    if element:
-                        text = await element.inner_text()
-                        if text and len(text.strip()) > 100:  # Apenas textos substanciais
-                            return {'company_history': text.strip()}
-                except:
-                    continue
-            
-            return None
-            
-        except Exception as e:
-            self.log_service.log_debug("Error extracting company history", {"error": str(e)})
-            return {}
 
-    async def _extract_news_and_updates(self, page: Page) -> dict:
-        """Extrai notícias e atualizações recentes"""
-        try:
-            news = []
-            
-            news_selectors = [
-                'section[id*="noticias"]',
-                'section[id*="news"]',
-                'div[class*="noticias"]',
-                'div[class*="news"]',
-                '.blog-posts',
-                '.news-section',
-                '.updates'
-            ]
-            
-            for selector in news_selectors:
-                try:
-                    section = await page.query_selector(selector)
-                    if section:
-                        # Buscar artigos/posts dentro da seção
-                        articles = await section.query_selector_all('article, .post, .news-item, .blog-item')
-                        
-                        for article in articles[:5]:  # Máximo 5 notícias
-                            title_elem = await article.query_selector('h1, h2, h3, h4, .title, .headline')
-                            date_elem = await article.query_selector('.date, .published, time')
-                            link_elem = await article.query_selector('a')
-                            
-                            if title_elem:
-                                title = await title_elem.inner_text()
-                                date = await date_elem.inner_text() if date_elem else None
-                                link = await link_elem.get_attribute('href') if link_elem else None
-                                
-                                news.append({
-                                    'title': title.strip(),
-                                    'date': date.strip() if date else None,
-                                    'link': link
-                                })
-                        break
-                except:
-                    continue
-            
-            return {'news_and_updates': news}
-            
-        except Exception as e:
-            self.log_service.log_debug("Error extracting news and updates", {"error": str(e)})
-            return {}
 
-    async def _extract_contact_info(self, page: Page) -> dict:
-        """Extrai informações de contato"""
-        try:
-            contact = {}
-            
-            # Buscar telefones
-            phone_selectors = ['a[href^="tel:"]', '.phone', '.telefone', '.contact-phone']
-            for selector in phone_selectors:
-                try:
-                    element = await page.query_selector(selector)
-                    if element:
-                        if selector.startswith('a[href^="tel:"]'):
-                            contact['phone'] = await element.get_attribute('href')
-                            contact['phone'] = contact['phone'].replace('tel:', '')
-                        else:
-                            contact['phone'] = await element.inner_text()
-                        break
-                except:
-                    continue
-            
-            # Buscar emails
-            email_selectors = ['a[href^="mailto:"]', '.email', '.contact-email']
-            for selector in email_selectors:
-                try:
-                    element = await page.query_selector(selector)
-                    if element:
-                        if selector.startswith('a[href^="mailto:"]'):
-                            contact['email'] = await element.get_attribute('href')
-                            contact['email'] = contact['email'].replace('mailto:', '')
-                        else:
-                            contact['email'] = await element.inner_text()
-                        break
-                except:
-                    continue
-            
-            # Buscar endereço
-            address_selectors = ['.address', '.endereco', '.contact-address', '.location']
-            for selector in address_selectors:
-                try:
-                    element = await page.query_selector(selector)
-                    if element:
-                        contact['address'] = await element.inner_text()
-                        break
-                except:
-                    continue
-            
-            return {'contact_info': contact}
-            
-        except Exception as e:
-            self.log_service.log_debug("Error extracting contact info", {"error": str(e)})
-            return {}
 
-    async def _extract_team_info(self, page: Page) -> dict:
-        """Extrai informações sobre a equipe/liderança"""
-        try:
-            team_info = {'leadership': [], 'team_size_estimate': None}
-            
-            # Seletores para seção de equipe
-            team_selectors = [
-                '.team-member',
-                '.leadership',
-                '[class*="team"]',
-                '[class*="founder"]',
-                '[class*="ceo"]',
-                '[class*="director"]'
-            ]
-            
-            for selector in team_selectors:
-                try:
-                    elements = await page.query_selector_all(selector)
-                    for element in elements[:10]:  # Limita a 10 membros
-                        name_elem = await element.query_selector('.name, h3, h4, .title')
-                        role_elem = await element.query_selector('.role, .position, .title')
-                        
-                        if name_elem:
-                            name = await name_elem.inner_text()
-                            role = await role_elem.inner_text() if role_elem else None
-                            
-                            team_info['leadership'].append({
-                                'name': name.strip(),
-                                'role': role.strip() if role else None
-                            })
-                except:
-                    continue
-            
-            return {'team_info': team_info}
-            
-        except Exception as e:
-            self.log_service.log_debug("Error extracting team info", {"error": str(e)})
-            return {}
 
-    async def _extract_products_services(self, page: Page) -> dict:
-        """Extrai informações sobre produtos e serviços"""
-        try:
-            products_services = []
-            
-            # Seletores para produtos/serviços
-            product_selectors = [
-                '.product',
-                '.service',
-                '[class*="product"]',
-                '[class*="service"]',
-                '.offering'
-            ]
-            
-            for selector in product_selectors:
-                try:
-                    elements = await page.query_selector_all(selector)
-                    for element in elements[:10]:  # Limita a 10 itens
-                        title_elem = await element.query_selector('h1, h2, h3, h4, .title, .name')
-                        desc_elem = await element.query_selector('.description, .desc, p')
-                        
-                        if title_elem:
-                            title = await title_elem.inner_text()
-                            description = await desc_elem.inner_text() if desc_elem else None
-                            
-                            products_services.append({
-                                'name': title.strip(),
-                                'description': description.strip() if description else None
-                            })
-                except:
-                    continue
-            
-            return {'products_services': products_services}
-            
-        except Exception as e:
-            self.log_service.log_debug("Error extracting products/services", {"error": str(e)})
-            return {}
 
-    async def _extract_company_values(self, page: Page) -> dict:
-        """Extrai valores e missão da empresa"""
-        try:
-            values = []
-            
-            # Seletores para valores/missão
-            values_selectors = [
-                '.value',
-                '.mission',
-                '.vision',
-                '[class*="value"]',
-                '[class*="mission"]',
-                '[class*="vision"]'
-            ]
-            
-            for selector in values_selectors:
-                try:
-                    elements = await page.query_selector_all(selector)
-                    for element in elements:
-                        text = await element.inner_text()
-                        if text and len(text.strip()) > 20:
-                            values.append(text.strip())
-                except:
-                    continue
-            
-            return {'company_values': values}
-            
-        except Exception as e:
-            self.log_service.log_debug("Error extracting company values", {"error": str(e)})
-            return {}
+
+
+
+
+
+
 
     async def _extract_certifications_from_html(self, html_content: str, url: str = None) -> dict:
         """Extrai certificações usando CrawlAI LLM"""
@@ -2570,36 +2545,7 @@ class CompanyEnrichmentService:
             'extraction_method': 'failed'
         }
 
-    async def _extract_certifications(self, page: Page) -> dict:
-        """Extrai certificações e prêmios da empresa"""
-        try:
-            certifications = []
-            
-            # Seletores para certificações
-            cert_selectors = [
-                '.certification',
-                '.award',
-                '.certificate',
-                '[class*="cert"]',
-                '[class*="award"]',
-                '[class*="badge"]'
-            ]
-            
-            for selector in cert_selectors:
-                try:
-                    elements = await page.query_selector_all(selector)
-                    for element in elements:
-                        text = await element.inner_text()
-                        if text and len(text.strip()) > 5:
-                            certifications.append(text.strip())
-                except:
-                    continue
-            
-            return {'certifications': certifications}
-            
-        except Exception as e:
-            self.log_service.log_debug("Error extracting certifications", {"error": str(e)})
-            return {}
+
 
 
 
