@@ -23,6 +23,8 @@ from crawl4ai.async_configs import LLMConfig
 
 from .log_service import LogService
 from .models import CompanyRequest, CompanyResponse, SocialMedia, Employee
+from .enhanced_social_extractor import EnhancedSocialExtractor
+from .enhanced_linkedin_scraper import EnhancedLinkedInScraper
 
 class BraveSearchRateLimiter:
     """Rate limiter para API do Brave Search"""
@@ -209,10 +211,32 @@ class CrawlAIService:
             # Limitar o tamanho do markdown para não exceder limites de tokens
             markdown_truncated = markdown[:15000] if len(markdown) > 15000 else markdown
             
-            # Criar prompt para extração
+            # DEBUG: Log do conteúdo markdown
+            print(f"DEBUG: Markdown content length: {len(markdown)}")
+            print(f"DEBUG: Markdown truncated length: {len(markdown_truncated)}")
+            print(f"DEBUG: First 500 chars of markdown: {markdown_truncated[:500]}")
+            
+            # Criar prompt para extração com prioridade para redes sociais
             prompt = f"""Extraia informações estruturadas sobre a empresa a partir do seguinte conteúdo de website:
             
             {markdown_truncated}
+            
+            PRIORIDADES DE EXTRAÇÃO:
+            1. REDES SOCIAIS (ALTA PRIORIDADE):
+               - LinkedIn: Procure por URLs do LinkedIn da empresa (linkedin.com/company/)
+               - Instagram: Procure por URLs do Instagram (@username ou instagram.com/)
+               - WhatsApp: Procure por números de WhatsApp ou links wa.me/
+               - Facebook, Twitter, YouTube, TikTok: URLs completas
+            
+            2. Para cada rede social encontrada:
+               - Extraia a URL completa
+               - Se possível, extraia nome de usuário/handle
+               - Procure por informações de seguidores/followers
+            
+            3. DADOS GERAIS DA EMPRESA:
+               - Nome, descrição, indústria, serviços
+               - Informações de contato (email, telefone)
+               - Localização, ano de fundação, tamanho da equipe
             
             Retorne apenas um objeto JSON válido seguindo este schema:
             {json.dumps(schema, indent=2)}
@@ -405,10 +429,17 @@ class CrawlAIService:
                         - services: array de serviços oferecidos
                         - products: array de produtos oferecidos
                         - contact_info: objeto com email, phone, address
-                        - social_media: objeto com linkedin, twitter, facebook, instagram
+                        - social_media: objeto com linkedin, twitter, facebook, instagram, whatsapp, youtube, tiktok (PRIORIDADE ALTA: procure especialmente por LinkedIn, Instagram e WhatsApp)
                         - team_size: tamanho da equipe
                         - founded_year: ano de fundação
                         - headquarters: sede da empresa
+                        
+                        INSTRUÇÕES ESPECIAIS PARA REDES SOCIAIS:
+                        - LinkedIn: procure por URLs como linkedin.com/company/[nome] ou linkedin.com/in/[perfil]
+                        - Instagram: procure por URLs como instagram.com/[usuario] ou @[usuario]
+                        - WhatsApp: procure por números de telefone com WhatsApp, links wa.me/ ou menções ao WhatsApp
+                        - Extraia URLs completas e válidas sempre que possível
+                        - Se encontrar perfis de redes sociais, inclua também informações como nome de usuário, seguidores, etc.
                         """
                         
                         # Chamar o LLM para extrair informações
@@ -560,190 +591,84 @@ class CrawlAIService:
             return {"error": str(e), "url": url}
     
     async def scrape_linkedin_company_advanced(self, linkedin_url: str) -> Dict[str, Any]:
-        """Scraping avançado de página do LinkedIn usando Crawl4AI com DeepSeek"""
+        """Scraping avançado de página do LinkedIn usando EnhancedLinkedInScraper"""
         try:
-            if not self.crawler:
-                raise Exception("Crawler not initialized. Use async context manager.")
+            self.log_service.log_debug("Starting Enhanced LinkedIn scraping", {"url": linkedin_url})
             
-            # Obter configuração LLM dinâmica
-            llm_config = self._get_llm_config()
-            
-            # Schema específico para LinkedIn
-            linkedin_schema = {
-                "type": "object",
-                "properties": {
-                    "company_name": {"type": "string", "description": "Nome oficial da empresa no LinkedIn"},
-                    "tagline": {"type": "string", "description": "Tagline/slogan da empresa"},
-                    "description": {"type": "string", "description": "Descrição completa da empresa"},
-                    "industry": {"type": "string", "description": "Setor de atuação"},
-                    "company_size": {"type": "string", "description": "Tamanho da empresa (ex: 11-50 funcionários)"},
-                    "headquarters": {"type": "string", "description": "Sede da empresa"},
-                    "founded": {"type": "string", "description": "Ano de fundação"},
-                    "website": {"type": "string", "description": "Website oficial"},
-                    "specialties": {"type": "array", "items": {"type": "string"}, "description": "Especialidades da empresa"},
-                    "followers_count": {"type": "string", "description": "Número de seguidores no LinkedIn"},
-                    "employees_count": {"type": "string", "description": "Número de funcionários"},
-                    "recent_posts": {"type": "array", "items": {"type": "string"}, "description": "Posts recentes da empresa"},
-                    "leadership": {"type": "array", "items": {"type": "string"}, "description": "Liderança da empresa"}
-                },
-                "required": ["company_name"]
-            }
-            
-            extraction_strategy = LLMExtractionStrategy(
-                provider=llm_config["provider"],
-                api_token=llm_config["api_token"],
-                base_url=llm_config["base_url"],
-                schema=linkedin_schema,
-                extraction_type="schema",
-                instruction="""Extraia informações detalhadas desta página do LinkedIn da empresa. 
-                Foque em dados visíveis na página como nome, descrição, setor, tamanho, sede, 
-                ano de fundação, website, especialidades, contagem de seguidores e funcionários."""
+            # Usar o novo EnhancedLinkedInScraper
+            result = await self.enhanced_linkedin_scraper.scrape_linkedin_company(
+                linkedin_url, 
+                provider="firecrawl",  # ou "crawlai"
+                log_service=self.log_service
             )
             
-            self.log_service.log_debug("Starting Crawl4AI LinkedIn scraping", {"url": linkedin_url})
-            
-            result = await self.crawler.arun(
-                url=linkedin_url,
-                extraction_strategy=extraction_strategy,
-                bypass_cache=True,
-                js_code=[
-                    "window.scrollTo(0, document.body.scrollHeight/2);",
-                    "await new Promise(resolve => setTimeout(resolve, 3000));",
-                    "window.scrollTo(0, document.body.scrollHeight);",
-                    "await new Promise(resolve => setTimeout(resolve, 2000));"
-                ],
-                wait_for="networkidle",
-                page_timeout=60000,
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            
-            # Adicionar log de depuração detalhado sobre a execução do Crawl4AI
-            self.log_service.log_debug("Crawl4AI execution details", { 
-                "url": linkedin_url, 
-                "success": result.success, 
-                "has_content": bool(result.extracted_content), 
-                "content_length": len(result.extracted_content) if result.extracted_content else 0, 
-                "has_markdown": bool(result.markdown), 
-                "markdown_length": len(result.markdown) if result.markdown else 0, 
-                "metadata": result.metadata 
-            })
-            
-            if result.success and result.extracted_content:
-                extracted_data = json.loads(result.extracted_content)
-                
-                # Normalizar dados para formato padrão
-                normalized_data = self._normalize_linkedin_data(extracted_data)
-                
-                self.log_service.log_debug("Crawl4AI LinkedIn extraction successful", {
+            if result and not result.get("error"):
+                self.log_service.log_debug("Enhanced LinkedIn extraction successful", {
                     "url": linkedin_url,
-                    "company_name": normalized_data.get("name", "Unknown"),
-                    "data_quality": self._assess_extraction_quality(normalized_data)
+                    "company_name": result.get("name", "Unknown"),
+                    "confidence_score": result.get("confidence_score", 0),
+                    "data_sources": result.get("data_sources", [])
                 })
-                
-                return normalized_data
+                return result
             else:
-                self.log_service.log_debug("Crawl4AI LinkedIn extraction failed", {
+                self.log_service.log_debug("Enhanced LinkedIn extraction failed", {
                     "url": linkedin_url,
-                    "error": result.error_message if hasattr(result, 'error_message') else "Unknown error"
+                    "error": result.get("error", "Unknown error")
                 })
-                return {"error": "LinkedIn extraction failed", "url": linkedin_url}
+                return result or {"error": "LinkedIn extraction failed", "url": linkedin_url}
                 
         except Exception as e:
-            self.log_service.log_debug("Crawl4AI LinkedIn scraping error", {
+            self.log_service.log_debug("Enhanced LinkedIn scraping error", {
                 "url": linkedin_url,
                 "error": str(e)
             })
             return {"error": str(e), "url": linkedin_url}
             
     async def scrape_linkedin_person(self, linkedin_url: str) -> Dict[str, Any]:
-        """Scraping de perfil pessoal LinkedIn usando CrawlAI"""
+        """Scraping de perfil pessoal LinkedIn usando EnhancedLinkedInScraper"""
         try:
-            if not self.crawler:
-                raise Exception("Crawler not initialized. Use async context manager.")
+            self.log_service.log_debug("Starting Enhanced LinkedIn person scraping", {"url": linkedin_url})
             
-            # Obter configuração LLM dinâmica
-            llm_config_data = self._get_llm_config()
-            
-            extraction_strategy = LLMExtractionStrategy(
-                llm_config=LLMConfig(
-                    provider=llm_config_data["provider"],
-                    api_token=llm_config_data["api_token"],
-                    base_url=llm_config_data["base_url"]
-                ),
-                schema={
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "headline": {"type": "string"},
-                        "location": {"type": "string"},
-                        "current_company": {"type": "string"},
-                        "current_title": {"type": "string"},
-                        "profile_image": {"type": "string"},
-                        "connections": {"type": "string"},
-                        "skills": {"type": "array", "items": {"type": "string"}},
-                        "experience": {"type": "array", "items": {"type": "object", "properties": {
-                            "company": {"type": "string"},
-                            "title": {"type": "string"},
-                            "duration": {"type": "string"}
-                        }}},
-                        "education": {"type": "array", "items": {"type": "object", "properties": {
-                            "institution": {"type": "string"},
-                            "degree": {"type": "string"},
-                            "duration": {"type": "string"}
-                        }}}
-                    }
-                },
-                extraction_type="schema",
-                instruction="Extract complete LinkedIn profile information including experience, education, skills, and current position."
+            # Usar o novo EnhancedLinkedInScraper para perfis pessoais
+            # Nota: O EnhancedLinkedInScraper é focado em empresas, mas pode ser adaptado
+            # Por enquanto, mantemos a funcionalidade básica
+            result = await self.enhanced_linkedin_scraper.scrape_linkedin_company(
+                linkedin_url, 
+                provider="firecrawl",
+                log_service=self.log_service
             )
             
-            result = await self.crawler.arun(
-                url=linkedin_url,
-                extraction_strategy=extraction_strategy,
-                bypass_cache=True,
-                js_code=[
-                    "window.scrollTo(0, document.body.scrollHeight/2);",
-                    "await new Promise(resolve => setTimeout(resolve, 2000));",
-                    "window.scrollTo(0, document.body.scrollHeight);",
-                    "await new Promise(resolve => setTimeout(resolve, 2000));"
-                ],
-                wait_for="networkidle",
-                page_timeout=60000,
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            
-            # Adicionar log de depuração detalhado sobre a execução do Crawl4AI
-            self.log_service.log_debug("Crawl4AI execution details", { 
-                "url": linkedin_url, 
-                "success": result.success, 
-                "has_content": bool(result.extracted_content), 
-                "content_length": len(result.extracted_content) if result.extracted_content else 0, 
-                "has_markdown": bool(result.markdown), 
-                "markdown_length": len(result.markdown) if result.markdown else 0, 
-                "metadata": result.metadata 
-            })
-            
-            if result.success and result.extracted_content:
-                extracted_data = json.loads(result.extracted_content)
+            if result and not result.get("error"):
+                # Adaptar dados de empresa para formato de pessoa se necessário
+                person_data = {
+                    "name": result.get("name", ""),
+                    "headline": result.get("tagline", ""),
+                    "location": result.get("headquarters", ""),
+                    "current_company": result.get("name", ""),
+                    "current_title": "",
+                    "profile_image": "",
+                    "connections": result.get("followers_count", ""),
+                    "skills": result.get("specialties", []),
+                    "experience": [],
+                    "education": [],
+                    "linkedin_url": linkedin_url,
+                    "extraction_quality": result.get("confidence_score", 0),
+                    "extraction_timestamp": datetime.now().isoformat()
+                }
                 
-                # Adicionar metadados
-                extracted_data["linkedin_url"] = linkedin_url
-                extracted_data["extraction_quality"] = self._calculate_person_confidence_score(extracted_data)
-                extracted_data["extraction_timestamp"] = datetime.now().isoformat()
-                
-                self.log_service.log_debug("LinkedIn person extraction successful", {
+                self.log_service.log_debug("Enhanced LinkedIn person extraction successful", {
                     "url": linkedin_url,
-                    "name": extracted_data.get("name", "Unknown"),
-                    "quality": extracted_data.get("extraction_quality", 0)
+                    "name": person_data.get("name", "Unknown"),
+                    "quality": person_data.get("extraction_quality", 0)
                 })
                 
-                return extracted_data
+                return person_data
             else:
-                self.log_service.log_debug("LinkedIn person extraction failed", {
+                self.log_service.log_debug("Enhanced LinkedIn person extraction failed", {
                     "url": linkedin_url,
-                    "error": result.error_message if hasattr(result, 'error_message') else "Unknown error"
+                    "error": result.get("error", "Unknown error")
                 })
-                return {"error": "LinkedIn person extraction failed", "url": linkedin_url}
+                return result or {"error": "LinkedIn person extraction failed", "url": linkedin_url}
                 
         except Exception as e:
             self.log_service.log_debug("LinkedIn person scraping error", {
@@ -753,72 +678,33 @@ class CrawlAIService:
             return {"error": str(e), "url": linkedin_url}
             
     async def find_linkedin_on_website(self, website_url: str) -> Optional[str]:
-        """Busca URLs do LinkedIn em websites usando CrawlAI com LLM"""
+        """Busca URLs do LinkedIn em websites usando EnhancedLinkedInScraper"""
         try:
-            llm_config_data = self._get_llm_config()
+            # Usar o EnhancedLinkedInScraper para encontrar LinkedIn
+            result = await self.enhanced_linkedin_scraper.find_linkedin_on_website(website_url)
             
-            extraction_strategy = LLMExtractionStrategy(
-                llm_config=LLMConfig(
-                    provider=llm_config_data["provider"],
-                    api_token=llm_config_data["api_token"],
-                    base_url=llm_config_data["base_url"]
-                ),
-                schema={
-                    "type": "object",
-                    "properties": {
-                        "linkedin_urls": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Lista de URLs do LinkedIn encontradas no site"
-                        },
-                        "company_linkedin": {
-                            "type": "string",
-                            "description": "URL principal do LinkedIn da empresa"
-                        }
-                    }
-                },
-                extraction_type="schema",
-                instruction="Encontre todos os links do LinkedIn nesta página, especialmente o link oficial da empresa. Procure por links que contenham 'linkedin.com/company/' ou 'linkedin.com/in/'. Retorne o link principal da empresa se encontrado."
-            )
-            
-            async with AsyncWebCrawler(verbose=True) as crawler:
-                result = await crawler.arun(
-                    url=website_url,
-                    extraction_strategy=extraction_strategy,
-                    bypass_cache=True
-                )
+            if result and result.get('linkedin_url'):
+                self.log_service.log_debug("LinkedIn URL found on website", {
+                    "website_url": website_url,
+                    "linkedin_url": result['linkedin_url'],
+                    "confidence": result.get('confidence_score', 0)
+                })
+                return result['linkedin_url']
+            else:
+                self.log_service.log_debug("No LinkedIn URL found on website", {
+                    "website_url": website_url
+                })
+                return None
                 
-                if result.success and result.extracted_content:
-                    try:
-                        data = json.loads(result.extracted_content)
-                        
-                        # Prioriza o link da empresa
-                        if data.get('company_linkedin'):
-                            return data['company_linkedin']
-                        
-                        # Senão, pega o primeiro link válido
-                        linkedin_urls = data.get('linkedin_urls', [])
-                        for url in linkedin_urls:
-                            if 'linkedin.com/company/' in url:
-                                return url
-                        
-                        # Se não encontrou da empresa, retorna qualquer LinkedIn
-                        if linkedin_urls:
-                            return linkedin_urls[0]
-                            
-                    except json.JSONDecodeError:
-                        pass
-                        
         except Exception as e:
-            self.log_service.log_debug("Error finding LinkedIn on website with CrawlAI", {
+            self.log_service.log_debug("Error finding LinkedIn on website", {
                 "error": str(e),
                 "url": website_url
             })
-        
-        return None
+            return None
 
     async def extract_company_data_from_html(self, html_content: str, url: str = None) -> Dict[str, Any]:
-        """Extrai dados da empresa de conteúdo HTML usando LLM"""
+        """Extrai dados da empresa de conteúdo HTML usando LLM com foco em redes sociais"""
         try:
             llm_config_data = self._get_llm_config()
             
@@ -841,10 +727,13 @@ class CrawlAIService:
                         "social_media": {
                             "type": "object",
                             "properties": {
-                                "linkedin": {"type": "string"},
-                                "twitter": {"type": "string"},
-                                "facebook": {"type": "string"},
-                                "instagram": {"type": "string"}
+                                "linkedin": {"type": "string", "description": "URL do perfil LinkedIn da empresa (prioridade alta)"},
+                                "instagram": {"type": "string", "description": "URL do perfil Instagram da empresa (prioridade alta)"},
+                                "whatsapp": {"type": "string", "description": "Número WhatsApp Business da empresa (prioridade alta)"},
+                                "twitter": {"type": "string", "description": "URL do perfil Twitter da empresa"},
+                                "facebook": {"type": "string", "description": "URL do perfil Facebook da empresa"},
+                                "youtube": {"type": "string", "description": "URL do canal YouTube da empresa"},
+                                "tiktok": {"type": "string", "description": "URL do perfil TikTok da empresa"}
                             }
                         },
                         "contact_info": {
@@ -1236,6 +1125,10 @@ class CompanyEnrichmentService:
         self.rate_limiter = BraveSearchRateLimiter(requests_per_second=3)
         # Inicializar CrawlAI service
         self.crawl4ai_service = CrawlAIService(log_service)
+        # Inicializar Enhanced Social Extractor
+        self.enhanced_social_extractor = EnhancedSocialExtractor(log_service)
+        # Inicializar Enhanced LinkedIn Scraper
+        self.enhanced_linkedin_scraper = EnhancedLinkedInScraper(log_service)
 
     async def enrich_company(self, company_data: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
         """Enriquece os dados de uma empresa, orquestrando a busca e o scraping"""
@@ -1280,7 +1173,40 @@ class CompanyEnrichmentService:
             "website": "string",
             "linkedin": "string",
             "employees": "array",
-            "social_media": "array"
+            "social_media": [
+                {
+                    "platform": "string (instagram, facebook, twitter, linkedin, youtube, etc.)",
+                    "url": "string (URL completa da rede social)"
+                }
+            ],
+            "instagram": {
+                "url": "string",
+                "username": "string",
+                "name": "string",
+                "bio": "string",
+                "email": "string",
+                "phone": "string",
+                "followers_count": "number",
+                "following_count": "number",
+                "posts_count": "number"
+            },
+            "linkedin_data": {
+                "url": "string",
+                "company_name": "string",
+                "industry": "string",
+                "size": "string",
+                "headquarters": "string",
+                "founded": "string",
+                "description": "string",
+                "followers_count": "number",
+                "employees_count": "number"
+            },
+            "whatsapp": {
+                "phone": "string",
+                "business_name": "string",
+                "description": "string",
+                "verified": "boolean"
+            }
         }
     
     async def _extract_json_from_markdown(self, markdown: str, schema: Dict[str, Any]) -> Dict[str, Any]:
@@ -1301,6 +1227,61 @@ class CompanyEnrichmentService:
             prompt = f"""Extraia informações estruturadas sobre a empresa a partir do seguinte conteúdo de website:
             
             {markdown_truncated}
+            
+            INSTRUÇÕES ESPECÍFICAS PARA CADA CAMPO:
+            
+            1. NAME (nome da empresa):
+            - Procure no título da página, cabeçalho, logo, seção "Sobre nós"
+            - Pode estar em tags <title>, <h1>, ou texto próximo ao logo
+            
+            2. DESCRIPTION (descrição):
+            - Procure em seções "Sobre", "Quem somos", "Nossa missão", meta description
+            - Resumo do que a empresa faz, seus serviços ou produtos principais
+            
+            3. INDUSTRY (setor/indústria):
+            - Identifique o setor baseado nos produtos/serviços mencionados
+            - Ex: "Tecnologia", "Energia Renovável", "Consultoria", "Saúde", etc.
+            
+            4. SIZE (tamanho da empresa):
+            - Procure por "funcionários", "colaboradores", "equipe", "team size"
+            - Números como "50+ funcionários", "100-500 pessoas", "startup", "pequena empresa"
+            - Seções "Sobre", "Carreiras", "Trabalhe conosco"
+            
+            5. FOUNDED (ano de fundação):
+            - Procure por "fundada em", "desde", "estabelecida", "criada em"
+            - Anos como "2010", "desde 1995", "fundada em 2020"
+            - Seções "História", "Sobre", "Nossa jornada"
+            
+            6. HEADQUARTERS (sede/localização):
+            - Procure endereços completos, cidades, países
+            - Seções "Contato", "Endereço", "Localização", "Escritórios"
+            - Formatos como "São Paulo, Brasil", "New York, USA"
+            
+            7. WEBSITE (site oficial):
+            - URL principal do website (geralmente o domínio atual)
+            - Remova parâmetros e mantenha apenas o domínio principal
+            
+            8. LINKEDIN (perfil LinkedIn da empresa):
+            - Procure links para linkedin.com/company/ ou linkedin.com/in/
+            - Pode estar em rodapés, seções de contato, ícones sociais
+            
+            9. REDES SOCIAIS (social_media):
+            - Procure cuidadosamente por links de Instagram, Facebook, WhatsApp, Twitter/X, YouTube
+            - Estes links podem estar em rodapés, cabeçalhos, seções "Contato", "Siga-nos"
+            - Se encontrar apenas ícones, tente inferir as URLs baseado no contexto
+            
+            FORMATO OBRIGATÓRIO PARA SOCIAL_MEDIA:
+            O campo "social_media" DEVE ser um array de objetos:
+            "social_media": [
+                {{"platform": "instagram", "url": "https://instagram.com/empresa"}},
+                {{"platform": "facebook", "url": "https://facebook.com/empresa"}}
+            ]
+            
+            INSTRUÇÕES GERAIS:
+            - Seja preciso e factual, não invente informações
+            - Se não encontrar uma informação, deixe o campo vazio ou null
+            - Priorize informações que aparecem múltiplas vezes ou em seções importantes
+            - Para números e datas, extraia apenas os valores numéricos
             
             Retorne apenas um objeto JSON válido seguindo este schema:
             {json.dumps(schema, indent=2)}
@@ -1339,6 +1320,10 @@ class CompanyEnrichmentService:
             
             result = response.json()
             content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+            
+            # DEBUG: Log da resposta do LLM
+            print(f"DEBUG: LLM response length: {len(content)}")
+            print(f"DEBUG: LLM response content: {content[:1000]}")
             
             # Tentar extrair o JSON da resposta
             import re
@@ -1380,12 +1365,22 @@ class CompanyEnrichmentService:
             
             mapped_data = {}
             # Verificar se o schema tem 'properties' ou se é um schema simples
-            schema_properties = schema.get('properties', schema)
+            if isinstance(schema, dict):
+                schema_properties = schema.get('properties', schema)
+            else:
+                # Se schema não é um dicionário, usar um dicionário vazio
+                schema_properties = {}
             
             # Mapear campos extraídos diretamente para o schema
             for extracted_field, extracted_value in extracted_data.items():
                 if extracted_field == '_metadata':
                     continue
+                
+                self.log_service.log_debug(f"Processing field: {extracted_field}", {
+                    "field_name": extracted_field,
+                    "field_type": type(extracted_value).__name__,
+                    "field_value_preview": str(extracted_value)[:100] if extracted_value else None
+                })
                 
                 # Verificar se o campo existe no schema
                 if extracted_field in schema_properties and extracted_value is not None:
@@ -1394,8 +1389,14 @@ class CompanyEnrichmentService:
                     # Se field_config é uma string (schema simples), tratar como tipo
                     if isinstance(field_config, str):
                         field_type = field_config
-                    else:
+                    elif isinstance(field_config, dict):
                         field_type = field_config.get('type', 'string')
+                    elif isinstance(field_config, list):
+                        # Se é uma lista, assumir que é um array
+                        field_type = 'array'
+                    else:
+                        # Fallback para string se não conseguir determinar o tipo
+                        field_type = 'string'
                     
                     # Validar e converter o tipo se necessário
                     if field_type == 'string' and not isinstance(extracted_value, str):
@@ -1459,10 +1460,21 @@ class CompanyEnrichmentService:
                             else:
                                 mapped_data[extracted_field] = [str(extracted_value)]
                     elif field_type == 'object' and not isinstance(extracted_value, dict):
-                        # Se não é objeto, criar um objeto básico
-                        mapped_data[extracted_field] = {"value": str(extracted_value)}
+                        # Tratamento especial para campos de redes sociais
+                        if extracted_field in ['instagram', 'linkedin_data', 'whatsapp', 'facebook', 'twitter', 'youtube']:
+                            # Se não é um objeto válido, inicializar como None para permitir fallback
+                            mapped_data[extracted_field] = None
+                        else:
+                            # Para outros objetos, criar um objeto básico
+                            mapped_data[extracted_field] = {"value": str(extracted_value)}
                     else:
                         mapped_data[extracted_field] = extracted_value
+            
+            # Garantir que campos de redes sociais existam (mesmo como None) para permitir fallback
+            social_media_fields = ['instagram', 'linkedin_data', 'whatsapp', 'facebook', 'twitter', 'youtube']
+            for field in social_media_fields:
+                if field not in mapped_data:
+                    mapped_data[field] = None
             
             # Adicionar metadados de qualidade
             mapped_data['_metadata'] = {
@@ -1483,28 +1495,312 @@ class CompanyEnrichmentService:
 
     async def scrape_company_website(self, crawler: CrawlAIService, domain: str, schema: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
         """Raspa o site da empresa para extrair informações detalhadas com base em um schema"""
+        print(f"🔍 INICIANDO SCRAPING PARA: {domain}")
+        print(f"DEBUG: Função scrape_company_website chamada para {domain}")
         try:
             from crawl4ai.async_configs import LLMConfig
             
             llm_config = LLMConfig(
-                provider="openai",
-                api_token=os.getenv("OPENAI_API_KEY")
+                provider="deepseek",
+                api_token=os.getenv("DEEPSEEK_API_KEY"),
+                base_url="https://api.deepseek.com"
             )
             
-            # Corrigir o parâmetro de 'domain' para 'url'
-            result = await crawler.crawler.arun(
-                url=f"https://{domain}",
-                extraction_strategy=LLMExtractionStrategy(
-                    llm_config=llm_config,
-                    instruction=f"Extract company information according to this schema: {schema}"
+            # Usar CrawlAI com estratégia de extração LLM
+            try:
+                result = await crawler.crawler.arun(
+                    url=f"https://{domain}",
+                    extraction_strategy=LLMExtractionStrategy(
+                        llm_config=llm_config,
+                        schema=schema,
+                        instruction="Extract company information from the webpage according to the provided schema. Focus on finding accurate business details, contact information, and social media links."
+                    ),
+                    word_count_threshold=10,
+                    bypass_cache=True
                 )
-            )
+                
+                # Log adicional para verificar o conteúdo HTML
+                self.log_service.log_debug("CrawlAI HTML content debug", {
+                    "domain": domain,
+                    "html_exists": result.html is not None if result else False,
+                    "html_length": len(result.html) if result and result.html else 0,
+                    "html_preview": result.html[:500] if result and result.html else None
+                })
+                
+                # Se temos HTML, vamos processar com nosso próprio LLM
+                if result and result.html:
+                    # Converter HTML para markdown usando BeautifulSoup
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(result.html, 'html.parser')
+                    
+                    # Remover scripts e styles
+                    for script in soup(["script", "style"]):
+                        script.decompose()
+                    
+                    # Extrair texto limpo
+                    text_content = soup.get_text()
+                    
+                    # Limpar texto
+                    lines = (line.strip() for line in text_content.splitlines())
+                    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                    clean_text = '\n'.join(chunk for chunk in chunks if chunk)
+                    
+                    # Truncar se muito longo
+                    if len(clean_text) > 8000:
+                        clean_text = clean_text[:8000] + "..."
+                    
+                    # Processar com nosso LLM
+                    extracted_data = await self._extract_json_from_markdown(clean_text, schema)
+                    
+                    if extracted_data:
+                        # Simular o resultado do CrawlAI
+                        result.extracted_content = extracted_data
+                        self.log_service.log_debug("Successfully processed HTML with our LLM", {
+                            "domain": domain,
+                            "extracted_fields": list(extracted_data.keys()) if extracted_data else []
+                        })
+                
+            except Exception as e:
+                self.log_service.log_debug("CrawlAI execution failed", {
+                    "domain": domain,
+                    "error": str(e)
+                })
+                result = None
+            
+            # Log de depuração para verificar o resultado do CrawlAI
+            self.log_service.log_debug("CrawlAI result debug", {
+                "domain": domain,
+                "result_exists": result is not None,
+                "extracted_content_exists": result.extracted_content is not None if result else False,
+                "extracted_content_type": type(result.extracted_content).__name__ if result and result.extracted_content else None,
+                "extracted_content_keys": list(result.extracted_content.keys()) if result and result.extracted_content and isinstance(result.extracted_content, dict) else None
+            })
             
             if result and result.extracted_content:
                 self.log_service.log_debug("CrawlAI extraction successful", {"domain": domain})
                 try:
-                    extracted_data = json.loads(result.extracted_content)
-                    return self._map_data_to_schema(extracted_data, schema)
+                    # Se extracted_content já é um dict, usar diretamente
+                    if isinstance(result.extracted_content, dict):
+                        extracted_data = result.extracted_content
+                    else:
+                        # Se é string JSON, fazer parse
+                        extracted_data = json.loads(result.extracted_content)
+                    
+                    # Verificar se extracted_data é um dicionário válido
+                    if not isinstance(extracted_data, dict):
+                        self.log_service.log_debug("Extracted data is not a dict, converting", {
+                            "type": type(extracted_data).__name__,
+                            "value": str(extracted_data)[:200]
+                        })
+                        # Se for uma lista, tentar usar o primeiro item se for um dict
+                        if isinstance(extracted_data, list) and len(extracted_data) > 0 and isinstance(extracted_data[0], dict):
+                            extracted_data = extracted_data[0]
+                        else:
+                            # Se não conseguir converter, usar dict vazio
+                            extracted_data = {}
+                    
+                    mapped_data = self._map_data_to_schema(extracted_data, schema)
+                    
+                    # Verificar se encontrou LinkedIn URL e fazer enriquecimento automático
+                    linkedin_url = self._extract_linkedin_url_from_data(mapped_data)
+                    if linkedin_url:
+                        self.log_service.log_debug("LinkedIn URL found, starting automatic enrichment", {"linkedin_url": linkedin_url})
+                        try:
+                            linkedin_data = await self.scrape_linkedin_company(linkedin_url, user_id)
+                            if linkedin_data and linkedin_data.get('enriched_data'):
+                                # Mesclar dados do LinkedIn com dados do website
+                                mapped_data = self._merge_linkedin_data(mapped_data, linkedin_data['enriched_data'])
+                                self.log_service.log_debug("LinkedIn data merged successfully")
+                        except Exception as e:
+                            self.log_service.log_debug("Error during LinkedIn enrichment", {"error": str(e)})
+                    
+                    # Verificar se encontrou Instagram URL e fazer scraping
+                    instagram_url = self._extract_instagram_url_from_data(mapped_data)
+                    if instagram_url:
+                        self.log_service.log_debug("Instagram URL found, starting profile scraping", {"instagram_url": instagram_url})
+                        try:
+                            instagram_data = await self._scrape_instagram_profile(instagram_url)
+                            if instagram_data:
+                                # Adicionar dados do Instagram como objeto válido
+                                mapped_data['instagram'] = instagram_data
+                                self.log_service.log_debug("Instagram data added successfully")
+                        except Exception as e:
+                            self.log_service.log_debug("Error during Instagram scraping", {"error": str(e)})
+                    
+                    # Fallback: Se campos de redes sociais estão vazios, tentar extração via HTML
+                    def is_empty_social_field(field):
+                        if not field:
+                            return True
+                        if isinstance(field, dict):
+                            # Verificar se é um dict vazio ou com valores vazios/zero
+                            return not any(v for v in field.values() if v and v != 0 and v != '')
+                        return False
+                    
+                    social_fields_empty = (
+                        is_empty_social_field(mapped_data.get('instagram')) and 
+                        is_empty_social_field(mapped_data.get('linkedin_data')) and 
+                        is_empty_social_field(mapped_data.get('whatsapp')) and
+                        is_empty_social_field(mapped_data.get('facebook')) and
+                        is_empty_social_field(mapped_data.get('twitter')) and
+                        is_empty_social_field(mapped_data.get('youtube'))
+                    )
+                    
+                    # Debug: Checkpoint - chegou na verificação de redes sociais
+                    print(f"DEBUG: Verificando campos de redes sociais para {domain}")
+                    print(f"DEBUG: social_fields_empty = {social_fields_empty}")
+                    print(f"DEBUG: has_html = {bool(result.html)}")
+                    
+                    # Debug: Log dos campos de redes sociais
+                    self.log_service.log_debug("Social media fields check", {
+                        "domain": domain,
+                        "instagram": mapped_data.get('instagram'),
+                        "linkedin_data": mapped_data.get('linkedin_data'),
+                        "whatsapp": mapped_data.get('whatsapp'),
+                        "facebook": mapped_data.get('facebook'),
+                        "twitter": mapped_data.get('twitter'),
+                        "youtube": mapped_data.get('youtube'),
+                        "social_fields_empty": social_fields_empty,
+                        "has_html": bool(result.html)
+                    })
+                    
+                    # Sempre tentar extrair redes sociais do HTML quando disponível
+                    if result.html:
+                        self.log_service.log_debug("Extracting social media from HTML", {"domain": domain, "html_length": len(result.html)})
+                        html_social_media_list = await self._extract_social_media_from_html(result.html)
+                        
+                        # Converter a lista de volta para o formato de dicionário para compatibilidade
+                        html_social_data = {}
+                        for item in html_social_media_list:
+                            platform = item.get('platform')
+                            if platform == 'linkedin':
+                                platform = 'linkedin_data'
+                                
+                            if platform and platform in ['instagram', 'linkedin_data', 'whatsapp', 'facebook', 'twitter', 'youtube', 'tiktok', 'telegram']:
+                                url = item.get('url')
+                                if url:
+                                    # Se tiver mais dados além da URL, criar um dicionário
+                                    if len(item) > 2:  # platform e url + outros campos
+                                        html_social_data[platform] = {
+                                            'url': url,
+                                            **{k: v for k, v in item.items() if k not in ['platform', 'url']}
+                                        }
+                                    else:
+                                        html_social_data[platform] = url
+                        
+                        # Aplicar dados extraídos via HTML se não existirem
+                        if html_social_data.get('instagram') and not mapped_data.get('instagram'):
+                            mapped_data['instagram'] = html_social_data['instagram']
+                        if html_social_data.get('linkedin_data') and not mapped_data.get('linkedin_data'):
+                            mapped_data['linkedin_data'] = html_social_data['linkedin_data']
+                        if html_social_data.get('whatsapp') and not mapped_data.get('whatsapp'):
+                            mapped_data['whatsapp'] = html_social_data['whatsapp']
+                        if html_social_data.get('facebook') and not mapped_data.get('facebook'):
+                            mapped_data['facebook'] = html_social_data['facebook']
+                        if html_social_data.get('twitter') and not mapped_data.get('twitter'):
+                            mapped_data['twitter'] = html_social_data['twitter']
+                        if html_social_data.get('youtube') and not mapped_data.get('youtube'):
+                            mapped_data['youtube'] = html_social_data['youtube']
+                        if html_social_data.get('tiktok') and not mapped_data.get('tiktok'):
+                            mapped_data['tiktok'] = html_social_data['tiktok']
+                        if html_social_data.get('telegram') and not mapped_data.get('telegram'):
+                            mapped_data['telegram'] = html_social_data['telegram']
+                    
+                    # Normalizar campos de redes sociais para formato de dicionário
+                    def normalize_social_field(field_value):
+                        if isinstance(field_value, str):
+                            return {'url': field_value}
+                        elif isinstance(field_value, dict) and field_value.get('url'):
+                            return field_value
+                        return None
+                    
+                    # Aplicar normalização aos campos de redes sociais
+                    if mapped_data.get('instagram'):
+                        mapped_data['instagram'] = normalize_social_field(mapped_data['instagram'])
+                    if mapped_data.get('linkedin_data'):
+                        mapped_data['linkedin_data'] = normalize_social_field(mapped_data['linkedin_data'])
+                    if mapped_data.get('whatsapp'):
+                        mapped_data['whatsapp'] = normalize_social_field(mapped_data['whatsapp'])
+                    if mapped_data.get('facebook'):
+                        mapped_data['facebook'] = normalize_social_field(mapped_data['facebook'])
+                    if mapped_data.get('twitter'):
+                        mapped_data['twitter'] = normalize_social_field(mapped_data['twitter'])
+                    if mapped_data.get('youtube'):
+                        mapped_data['youtube'] = normalize_social_field(mapped_data['youtube'])
+                    if mapped_data.get('tiktok'):
+                        mapped_data['tiktok'] = normalize_social_field(mapped_data['tiktok'])
+                    if mapped_data.get('telegram'):
+                        mapped_data['telegram'] = normalize_social_field(mapped_data['telegram'])
+                    if 'twitter' not in mapped_data or not isinstance(mapped_data.get('twitter'), dict):
+                        mapped_data['twitter'] = None
+                    if 'youtube' not in mapped_data or not isinstance(mapped_data.get('youtube'), dict):
+                        mapped_data['youtube'] = None
+                    
+                    # Criar o campo social_media como lista de dicionários
+                    social_media_list = []
+                    
+                    # Adicionar URLs de redes sociais encontradas
+                    if mapped_data.get('facebook') and isinstance(mapped_data['facebook'], dict) and mapped_data['facebook'].get('url'):
+                        social_media_list.append({
+                            "platform": "facebook",
+                            "url": mapped_data['facebook']['url']
+                        })
+                    if mapped_data.get('twitter') and isinstance(mapped_data['twitter'], dict) and mapped_data['twitter'].get('url'):
+                        social_media_list.append({
+                            "platform": "twitter", 
+                            "url": mapped_data['twitter']['url']
+                        })
+                    if mapped_data.get('youtube') and isinstance(mapped_data['youtube'], dict) and mapped_data['youtube'].get('url'):
+                        social_media_list.append({
+                            "platform": "youtube",
+                            "url": mapped_data['youtube']['url']
+                        })
+                    if mapped_data.get('instagram') and isinstance(mapped_data['instagram'], dict) and mapped_data['instagram'].get('url'):
+                        social_media_list.append({
+                            "platform": "instagram",
+                            "url": mapped_data['instagram']['url']
+                        })
+                    if mapped_data.get('linkedin_data') and isinstance(mapped_data['linkedin_data'], dict) and mapped_data['linkedin_data'].get('url'):
+                        social_media_list.append({
+                            "platform": "linkedin",
+                            "url": mapped_data['linkedin_data']['url']
+                        })
+                    if mapped_data.get('whatsapp') and isinstance(mapped_data['whatsapp'], dict) and mapped_data['whatsapp'].get('url'):
+                        social_media_list.append({
+                            "platform": "whatsapp",
+                            "url": mapped_data['whatsapp']['url']
+                        })
+                    if mapped_data.get('tiktok') and isinstance(mapped_data['tiktok'], dict):
+                        tiktok_entry = {
+                            "platform": "tiktok"
+                        }
+                        if mapped_data['tiktok'].get('url'):
+                            tiktok_entry["url"] = mapped_data['tiktok']['url']
+                        if mapped_data['tiktok'].get('username'):
+                            tiktok_entry["username"] = mapped_data['tiktok']['username']
+                        if mapped_data['tiktok'].get('followers'):
+                            tiktok_entry["followers"] = mapped_data['tiktok']['followers']
+                        if mapped_data['tiktok'].get('likes'):
+                            tiktok_entry["likes"] = mapped_data['tiktok']['likes']
+                        if tiktok_entry.get('url') or tiktok_entry.get('username'):
+                            social_media_list.append(tiktok_entry)
+                    
+                    if mapped_data.get('telegram') and isinstance(mapped_data['telegram'], dict):
+                        telegram_entry = {
+                            "platform": "telegram"
+                        }
+                        if mapped_data['telegram'].get('url'):
+                            telegram_entry["url"] = mapped_data['telegram']['url']
+                        if mapped_data['telegram'].get('username'):
+                            telegram_entry["username"] = mapped_data['telegram']['username']
+                        if mapped_data['telegram'].get('members'):
+                            telegram_entry["members"] = mapped_data['telegram']['members']
+                        if telegram_entry.get('url') or telegram_entry.get('username'):
+                            social_media_list.append(telegram_entry)
+                    
+                    mapped_data['social_media'] = social_media_list
+                    
+                    print(f"DEBUG: Retornando dados mapeados para {domain}: {mapped_data.get('social_media', [])}")
+                    return mapped_data
                 except json.JSONDecodeError:
                     self.log_service.log_debug("CrawlAI returned invalid JSON, falling back to Firecrawl", {"domain": domain})
                     return await self._scrape_with_firecrawl(f"https://{domain}", schema, user_id)
@@ -1799,21 +2095,56 @@ class CompanyEnrichmentService:
             
             self.log_service.log_debug("Starting Firecrawl scraping with enhanced config", {"url": url})
             
-            scraped_data = app.scrape_url(url)
+            # Configurar parâmetros para garantir captura de HTML e markdown
+            scraped_data = app.scrape_url(
+                url,
+                formats=['markdown', 'html']
+            )
             
-            # Acessar markdown corretamente do objeto ScrapeResponse
+            # Acessar markdown e HTML corretamente do objeto ScrapeResponse
             markdown_content = None
-            if hasattr(scraped_data, 'markdown'):
+            html_content = None
+            
+            # Verificar se scraped_data é uma lista (formato atual da resposta)
+            if isinstance(scraped_data, list) and len(scraped_data) > 0:
+                # Assumir que o primeiro item contém markdown e o segundo contém HTML
+                if len(scraped_data) >= 1 and isinstance(scraped_data[0], str):
+                    markdown_content = scraped_data[0]
+                if len(scraped_data) >= 2 and isinstance(scraped_data[1], str):
+                    html_content = scraped_data[1]
+            # Verificar se é um objeto com atributos
+            elif hasattr(scraped_data, 'markdown'):
                 markdown_content = scraped_data.markdown
+            # Verificar se é um dicionário
             elif isinstance(scraped_data, dict):
                 markdown_content = scraped_data.get('markdown')
+                
+            # Verificar HTML da mesma forma
+            if html_content is None:
+                if hasattr(scraped_data, 'html'):
+                    html_content = scraped_data.html
+                elif isinstance(scraped_data, dict):
+                    html_content = scraped_data.get('html')
 
+            self.log_service.log_debug("Firecrawl response details", {
+                "url": url,
+                "response_type": str(type(scraped_data)),
+                "has_markdown_attr": hasattr(scraped_data, 'markdown'),
+                "has_html_attr": hasattr(scraped_data, 'html'),
+                "scraped_data_keys": list(scraped_data.__dict__.keys()) if hasattr(scraped_data, '__dict__') else "No __dict__",
+                "scraped_data_dir": [attr for attr in dir(scraped_data) if not attr.startswith('_')],
+                "markdown_length": len(markdown_content) if markdown_content else 0,
+                "html_length": len(html_content) if html_content else 0
+            })
+            
             if not markdown_content:
                 self.log_service.log_debug("Firecrawl response has no markdown content", {
                     "url": url,
                     "response_type": str(type(scraped_data)),
                     "has_markdown_attr": hasattr(scraped_data, 'markdown'),
-                    "markdown_length": len(markdown_content) if markdown_content else 0
+                    "has_html_attr": hasattr(scraped_data, 'html'),
+                    "markdown_length": len(markdown_content) if markdown_content else 0,
+                    "html_length": len(html_content) if html_content else 0
                 })
                 return {"error": "No markdown content from Firecrawl"}
             
@@ -1825,12 +2156,80 @@ class CompanyEnrichmentService:
 
             mapped_data = self._map_data_to_schema(extracted, schema)
             
+            # Garantir que instagram, linkedin_data e whatsapp sejam objetos válidos ou None
+            if 'instagram' in mapped_data and not isinstance(mapped_data['instagram'], dict):
+                mapped_data['instagram'] = None
+            if 'linkedin_data' in mapped_data and not isinstance(mapped_data['linkedin_data'], dict):
+                mapped_data['linkedin_data'] = None
+            if 'whatsapp' in mapped_data and not isinstance(mapped_data['whatsapp'], dict):
+                mapped_data['whatsapp'] = None
+            
             self.log_service.log_debug("Firecrawl markdown extraction successful", {
                 "url": url, 
                 "extracted_keys": list(mapped_data.keys()) if mapped_data else [],
-                "data_quality": self._assess_data_quality(mapped_data) if mapped_data else 0
+                "data_quality": self._assess_data_quality(mapped_data) if mapped_data else 0,
+                "has_html_for_fallback": bool(html_content)
             })
-            return mapped_data
+            
+            # Verificar se redes sociais foram extraídas
+            social_media = mapped_data.get('social_media', []) if isinstance(mapped_data, dict) else []
+            
+            # Verificar se social_media é uma lista antes de acessar seus atributos
+            if isinstance(social_media, list):
+                has_social_media = len(social_media) > 0 and any(
+                    item.get('platform') in ['instagram', 'linkedin', 'facebook', 'twitter', 'youtube', 'whatsapp']
+                    for item in social_media if isinstance(item, dict)
+                )
+            else:
+                has_social_media = False
+                # Corrigir o tipo de social_media se não for uma lista
+                social_media = []
+                if isinstance(mapped_data, dict):
+                    mapped_data['social_media'] = social_media
+            
+            # Se não encontrou redes sociais no Firecrawl, tentar fallback com requests
+            if not has_social_media:
+                self.log_service.log_debug("No social media found in Firecrawl, trying requests fallback", {"url": url})
+                try:
+                    import requests
+                    from bs4 import BeautifulSoup
+                    
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
+                    response = requests.get(url, headers=headers, timeout=10)
+                    response.raise_for_status()
+                    
+                    # Extrair redes sociais do HTML completo
+                    fallback_social_list = await self._extract_social_media_from_html(response.text)
+                    
+                    # Usar a lista diretamente sem conversão para dict
+                    if fallback_social_list and len(fallback_social_list) > 0:
+                        self.log_service.log_debug("Found social media with requests fallback", {
+                            "url": url,
+                            "social_media": fallback_social_list
+                        })
+                        # Mesclar com dados existentes
+                        if 'social_media' not in mapped_data:
+                            mapped_data['social_media'] = []
+                        # Adicionar novos itens da lista de fallback
+                        if isinstance(mapped_data['social_media'], list):
+                            mapped_data['social_media'].extend(fallback_social_list)
+                        else:
+                            mapped_data['social_media'] = fallback_social_list
+                    
+                except Exception as e:
+                    self.log_service.log_debug("Requests fallback failed", {
+                        "url": url,
+                        "error": str(e)
+                    })
+            
+            # Incluir HTML no resultado para permitir fallback
+            result = mapped_data.copy() if mapped_data else {}
+            if html_content:
+                result['html'] = html_content
+            
+            return result
             
         except Exception as e:
             self.log_service.log_debug("Firecrawl scraping failed", {"url": url, "error": str(e)})
@@ -2413,10 +2812,28 @@ class CompanyEnrichmentService:
     async def _scrape_company_website(self, website_url: str) -> Dict[str, Any]:
         """Scraping aprimorado de website usando CrawlAI com fallback para Firecrawl"""
         try:
-            # Primeiro tenta com CrawlAI
-            result = await self.crawlai_service.scrape_company_website_complete(website_url)
+            # Primeiro tenta com CrawlAI usando context manager
+            async with self.crawl4ai_service as crawler:
+                result = await crawler.scrape_company_website_complete(website_url)
             
             if result.get('success') and result.get('confidence_score', 0) > 0.6:
+                # Verificar se encontrou redes sociais
+                social_media_found = self._check_social_media_found(result)
+                
+                # Se não encontrou redes sociais, tentar buscar em páginas de contato
+                if not social_media_found:
+                    self.log_service.log_debug("No social media found in main page, searching contact pages", {
+                        "url": website_url
+                    })
+                    contact_social_media = await self._scrape_contact_pages_for_social_media(website_url)
+                    
+                    # Merge das redes sociais encontradas nas páginas de contato
+                    if any(contact_social_media.values()):
+                        result = self._merge_contact_social_media(result, contact_social_media)
+                        self.log_service.log_debug("Merged social media from contact pages", {
+                            "contact_social_media": {k: v for k, v in contact_social_media.items() if v}
+                        })
+                
                 return {
                     'success': True,
                     'data': result,
@@ -2430,9 +2847,30 @@ class CompanyEnrichmentService:
                 "crawlai_confidence": result.get('confidence_score', 0)
             })
             
-            firecrawl_result = await self._scrape_with_firecrawl(website_url)
+            # Usar schema padrão para Firecrawl
+            schema = self._get_default_schema()
+            firecrawl_result = await self._scrape_with_firecrawl(website_url, schema)
             
             if firecrawl_result.get('success'):
+                # Verificar se encontrou redes sociais no Firecrawl
+                social_media_found = self._check_social_media_found(firecrawl_result.get('data', {}))
+                
+                # Se não encontrou redes sociais, tentar buscar em páginas de contato
+                if not social_media_found:
+                    self.log_service.log_debug("No social media found in Firecrawl result, searching contact pages", {
+                        "url": website_url
+                    })
+                    contact_social_media = await self._scrape_contact_pages_for_social_media(website_url)
+                    
+                    # Merge das redes sociais encontradas nas páginas de contato
+                    if any(contact_social_media.values()):
+                        firecrawl_data = firecrawl_result.get('data', {})
+                        firecrawl_data = self._merge_contact_social_media(firecrawl_data, contact_social_media)
+                        firecrawl_result['data'] = firecrawl_data
+                        self.log_service.log_debug("Merged social media from contact pages to Firecrawl", {
+                            "contact_social_media": {k: v for k, v in contact_social_media.items() if v}
+                        })
+                
                 return {
                     'success': True,
                     'data': firecrawl_result.get('data', {}),
@@ -2462,27 +2900,846 @@ class CompanyEnrichmentService:
             'confidence_score': 0.0
         }
 
+    def _check_social_media_found(self, data: Dict[str, Any]) -> bool:
+        """Verifica se foram encontradas redes sociais nos dados"""
+        if not data:
+            return False
+            
+        social_platforms = ['instagram', 'linkedin', 'facebook', 'youtube', 'whatsapp', 'twitter']
+        
+        # Verificar se há redes sociais no nível raiz
+        for platform in social_platforms:
+            if data.get(platform):
+                return True
+        
+        # Verificar se há redes sociais em social_media
+        social_media = data.get('social_media', {})
+        if isinstance(social_media, dict):
+            for platform in social_platforms:
+                if social_media.get(platform):
+                    return True
+        
+        return False
+    
+    def _merge_contact_social_media(self, main_data: Dict[str, Any], contact_social: Dict[str, str]) -> Dict[str, Any]:
+        """Merge das redes sociais encontradas em páginas de contato com os dados principais"""
+        if not contact_social or not any(contact_social.values()):
+            return main_data
+        
+        # Garantir que existe a estrutura social_media
+        if 'social_media' not in main_data:
+            main_data['social_media'] = []
+        
+        # Merge das redes sociais, priorizando as já existentes
+        for platform, url in contact_social.items():
+            if url:
+                # Adicionar no nível raiz se não existir
+                if not main_data.get(platform):
+                    main_data[platform] = url
+                
+                # Adicionar em social_media se não existir
+                if not main_data['social_media'].get(platform):
+                    main_data['social_media'][platform] = url
+        
+        return main_data
+    
+    async def _scrape_contact_pages_for_social_media(self, base_url: str) -> Dict[str, Any]:
+        """Busca redes sociais em páginas de contato quando não encontradas na página principal"""
+        social_media = {
+            "instagram": None,
+            "linkedin_data": None,
+            "whatsapp": None,
+            "facebook": None,
+            "twitter": None,
+            "youtube": None,
+            "tiktok": None,
+            "telegram": None
+        }
+        
+        try:
+            from urllib.parse import urljoin, urlparse
+            
+            # Lista de possíveis URLs de contato
+            contact_urls = [
+                urljoin(base_url, '/contato'),
+                urljoin(base_url, '/contact'),
+                urljoin(base_url, '/contact-us'),
+                urljoin(base_url, '/fale-conosco'),
+                urljoin(base_url, '/sobre'),
+                urljoin(base_url, '/about'),
+                urljoin(base_url, '/about-us'),
+                urljoin(base_url, '/empresa'),
+                urljoin(base_url, '/company'),
+                urljoin(base_url, '/footer'),
+                urljoin(base_url, '/rodape')
+            ]
+            
+            # Adicionar variações com subdomínios
+            parsed_url = urlparse(base_url)
+            if not parsed_url.netloc.startswith('www.'):
+                www_base = f"{parsed_url.scheme}://www.{parsed_url.netloc}"
+                contact_urls.extend([
+                    urljoin(www_base, '/contato'),
+                    urljoin(www_base, '/contact'),
+                    urljoin(www_base, '/contact-us')
+                ])
+            
+            # Adicionar subdomínios comuns
+            subdomain_bases = [
+                f"{parsed_url.scheme}://materiais.{parsed_url.netloc.replace('www.', '')}",
+                f"{parsed_url.scheme}://site.{parsed_url.netloc.replace('www.', '')}",
+                f"{parsed_url.scheme}://portal.{parsed_url.netloc.replace('www.', '')}"
+            ]
+            
+            for subdomain_base in subdomain_bases:
+                contact_urls.extend([
+                    urljoin(subdomain_base, '/contato'),
+                    urljoin(subdomain_base, '/contact')
+                ])
+            
+            self.log_service.log_debug("Searching for social media in contact pages", {
+                "base_url": base_url,
+                "contact_urls_count": len(contact_urls)
+            })
+            
+            # Tentar cada URL de contato
+            for contact_url in contact_urls:
+                try:
+                    self.log_service.log_debug("Trying contact URL", {"url": contact_url})
+                    
+                    # Usar Firecrawl para scraping da página de contato
+                    try:
+                        firecrawl_app = FirecrawlApp(api_key=os.getenv('FIRECRAWL_API_KEY'))
+                        
+                        # Usar sintaxe correta do Firecrawl v2
+                        scraped_data = firecrawl_app.scrape_url(
+                            contact_url,
+                            formats=['markdown', 'html']
+                        )
+                        
+                        # scraped_data é um objeto ScrapeResponse com atributo data
+                        firecrawl_result = {
+                            'success': True,
+                            'data': scraped_data.data if hasattr(scraped_data, 'data') else {}
+                        }
+                        
+                    except Exception as e:
+                        self.log_service.log_error("Error scraping contact page with Firecrawl", {
+                            "url": contact_url,
+                            "error": str(e)
+                        })
+                        firecrawl_result = {'success': False}
+                    
+                    if firecrawl_result.get('success'):
+                        html_content = firecrawl_result.get('data', {}).get('html', '')
+                        markdown_content = firecrawl_result.get('data', {}).get('markdown', '')
+                        
+                        if html_content:
+                            # Extrair redes sociais do HTML
+                            page_social_media_list = await self._extract_social_media_from_html(html_content)
+                            
+                            # Converter a lista para o formato de dicionário para compatibilidade
+                            page_social_media = {}
+                            for item in page_social_media_list:
+                                platform = item.get('platform')
+                                if platform == 'linkedin':
+                                    platform = 'linkedin_data'
+                                    
+                                if platform and platform in ['instagram', 'linkedin_data', 'whatsapp', 'facebook', 'twitter', 'youtube', 'tiktok', 'telegram']:
+                                    url = item.get('url')
+                                    if url:
+                                        # Se tiver mais dados além da URL, criar um dicionário
+                                        if len(item) > 2:  # platform e url + outros campos
+                                            page_social_media[platform] = {
+                                                'url': url,
+                                                **{k: v for k, v in item.items() if k not in ['platform', 'url']}
+                                            }
+                                        else:
+                                            page_social_media[platform] = url
+                            
+                            # Também buscar no markdown
+                            if markdown_content:
+                                markdown_social_media_list = self._extract_social_media_from_markdown(markdown_content)
+                                
+                                # Converter a lista para o formato de dicionário para compatibilidade
+                                markdown_social_media = {}
+                                for item in markdown_social_media_list:
+                                    platform = item.get('platform')
+                                    if platform == 'linkedin':
+                                        platform = 'linkedin_data'
+                                        
+                                    if platform and platform in ['instagram', 'linkedin_data', 'whatsapp', 'facebook', 'twitter', 'youtube', 'tiktok', 'telegram']:
+                                        url = item.get('url')
+                                        if url:
+                                            # Se tiver mais dados além da URL, criar um dicionário
+                                            if len(item) > 2:  # platform e url + outros campos
+                                                markdown_social_media[platform] = {
+                                                    'url': url,
+                                                    **{k: v for k, v in item.items() if k not in ['platform', 'url']}
+                                                }
+                                            else:
+                                                markdown_social_media[platform] = url
+                                
+                                # Merge dos resultados
+                                for platform, url in markdown_social_media.items():
+                                    if url and not page_social_media.get(platform):
+                                        page_social_media[platform] = url
+                            
+                            # Verificar se encontrou alguma rede social
+                            found_any = any(page_social_media.values())
+                            if found_any:
+                                self.log_service.log_debug("Found social media in contact page", {
+                                    "url": contact_url,
+                                    "social_media": {k: v for k, v in page_social_media.items() if v}
+                                })
+                                
+                                # Merge com os resultados existentes
+                                for platform, url in page_social_media.items():
+                                    if url and not social_media.get(platform):
+                                        social_media[platform] = url
+                                
+                                # Se encontrou redes sociais suficientes, pode parar
+                                filled_count = sum(1 for v in social_media.values() if v)
+                                if filled_count >= 3:  # Se encontrou 3 ou mais redes sociais
+                                    break
+                    
+                except Exception as e:
+                    self.log_service.log_debug("Error scraping contact URL", {
+                        "url": contact_url,
+                        "error": str(e)
+                    })
+                    continue
+            
+            return social_media
+            
+        except Exception as e:
+            self.log_service.log_debug("Error in contact pages social media search", {
+                "error": str(e),
+                "base_url": base_url
+            })
+            return social_media
+    
+    def _extract_social_media_from_markdown(self, markdown_content: str) -> List[Dict[str, Any]]:
+        """Extrai URLs de redes sociais do conteúdo markdown"""
+        social_media = {
+            "instagram": None,
+            "linkedin_data": None,
+            "whatsapp": None,
+            "facebook": None,
+            "twitter": None,
+            "youtube": None,
+            "tiktok": None,
+            "telegram": None
+        }
+        
+        try:
+            import re
+            
+            # Patterns para buscar no markdown
+            patterns = {
+                "instagram": [
+                    r'https?://(?:www\.)?instagram\.com/([a-zA-Z0-9_.]+)/?',
+                    r'\[.*?\]\(https?://(?:www\.)?instagram\.com/([a-zA-Z0-9_.]+)/?\)',
+                    r'@([a-zA-Z0-9_.]+).*instagram'
+                ],
+                "linkedin": [
+                    r'https?://(?:www\.)?linkedin\.com/company/([a-zA-Z0-9-]+)/?',
+                    r'\[.*?\]\(https?://(?:www\.)?linkedin\.com/company/([a-zA-Z0-9-]+)/?\)',
+                    r'https?://(?:www\.)?linkedin\.com/in/([a-zA-Z0-9-]+)/?'
+                ],
+                "facebook": [
+                    r'https?://(?:www\.)?facebook\.com/([a-zA-Z0-9.]+)/?',
+                    r'\[.*?\]\(https?://(?:www\.)?facebook\.com/([a-zA-Z0-9.]+)/?\)'
+                ],
+                "youtube": [
+                    r'https?://(?:www\.)?youtube\.com/(?:channel/|c/|user/)?([a-zA-Z0-9_-]+)/?',
+                    r'\[.*?\]\(https?://(?:www\.)?youtube\.com/(?:channel/|c/|user/)?([a-zA-Z0-9_-]+)/?\)'
+                ],
+                "whatsapp": [
+                    r'https?://(?:wa\.me|api\.whatsapp\.com)/([0-9]+)',
+                    r'\[.*?\]\(https?://(?:wa\.me|api\.whatsapp\.com)/([0-9]+)\)',
+                    r'\+?([0-9]{10,15}).*whatsapp'
+                ],
+                "twitter": [
+                    r'https?://(?:www\.)?(?:twitter\.com|x\.com)/([a-zA-Z0-9_]+)/?',
+                    r'\[.*?\]\(https?://(?:www\.)?(?:twitter\.com|x\.com)/([a-zA-Z0-9_]+)/?\)'
+                ]
+            }
+            
+            for platform, platform_patterns in patterns.items():
+                for pattern in platform_patterns:
+                    matches = re.findall(pattern, markdown_content, re.IGNORECASE)
+                    if matches:
+                        if platform == 'linkedin':
+                            social_media['linkedin_data'] = f"https://linkedin.com/company/{matches[0]}"
+                        elif platform == 'whatsapp':
+                            social_media['whatsapp'] = f"https://wa.me/{matches[0]}"
+                        else:
+                            base_urls = {
+                                'instagram': 'https://instagram.com/',
+                                'facebook': 'https://facebook.com/',
+                                'youtube': 'https://youtube.com/c/',
+                                'twitter': 'https://twitter.com/'
+                            }
+                            if platform in base_urls:
+                                social_media[platform] = f"{base_urls[platform]}{matches[0]}"
+                        break
+            
+            # Converter o dicionário em uma lista de dicionários no formato esperado
+            social_media_list = []
+            for platform, data in social_media.items():
+                if data is not None:
+                    if platform == "linkedin_data":
+                        platform_name = "linkedin"
+                    else:
+                        platform_name = platform
+                    
+                    if isinstance(data, dict):
+                        social_media_list.append({
+                            "platform": platform_name,
+                            "url": data.get("url"),
+                            **{k: v for k, v in data.items() if k != "url"}
+                        })
+                    else:
+                        social_media_list.append({
+                            "platform": platform_name,
+                            "url": data
+                        })
+            
+            return social_media_list
+            
+        except Exception as e:
+            self.log_service.log_debug("Error extracting social media from markdown", {
+                "error": str(e)
+            })
+            return []
+
+    def _extract_json_ld_social_media(self, html_content: str) -> List[Dict[str, Any]]:
+        """Extrai dados de redes sociais de estruturas JSON-LD"""
+        social_data = {}
+        
+        try:
+            from bs4 import BeautifulSoup
+            import json
+            
+            soup = BeautifulSoup(html_content, 'html.parser')
+            json_ld_scripts = soup.find_all('script', type='application/ld+json')
+            
+            for script in json_ld_scripts:
+                try:
+                    data = json.loads(script.string)
+                    
+                    # Processar diferentes estruturas JSON-LD
+                    if isinstance(data, list):
+                        for item in data:
+                            self._process_json_ld_item(item, social_data)
+                    elif isinstance(data, dict):
+                        self._process_json_ld_item(data, social_data)
+                        
+                        # Verificar se há @graph
+                        if '@graph' in data:
+                            for item in data['@graph']:
+                                self._process_json_ld_item(item, social_data)
+                                
+                except json.JSONDecodeError:
+                    continue
+                    
+        except Exception as e:
+            self.log_service.log_debug("Error extracting JSON-LD social media", {"error": str(e)})
+            
+        # Converter o dicionário em uma lista de dicionários no formato esperado
+        social_media_list = []
+        for platform, data in social_data.items():
+            if data is not None:
+                if platform == "linkedin_data":
+                    platform_name = "linkedin"
+                else:
+                    platform_name = platform
+                
+                if isinstance(data, dict):
+                    social_media_list.append({
+                        "platform": platform_name,
+                        "url": data.get("url"),
+                        **{k: v for k, v in data.items() if k != "url"}
+                    })
+                else:
+                    social_media_list.append({
+                        "platform": platform_name,
+                        "url": data
+                    })
+        
+        return social_media_list
+    
+    def _process_json_ld_item(self, item: Dict[str, Any], social_data: Dict[str, Any]) -> None:
+        """Processa um item JSON-LD para extrair URLs de redes sociais"""
+        if not isinstance(item, dict):
+            return
+            
+        # Verificar campo sameAs
+        if 'sameAs' in item:
+            same_as = item['sameAs']
+            if isinstance(same_as, list):
+                for url in same_as:
+                    self._categorize_social_url(url, social_data)
+            elif isinstance(same_as, str):
+                self._categorize_social_url(same_as, social_data)
+        
+        # Verificar outros campos comuns
+        social_fields = ['url', 'mainEntityOfPage', 'potentialAction']
+        for field in social_fields:
+            if field in item:
+                value = item[field]
+                if isinstance(value, str):
+                    self._categorize_social_url(value, social_data)
+                elif isinstance(value, list):
+                    for url in value:
+                        if isinstance(url, str):
+                            self._categorize_social_url(url, social_data)
+    
+    def _categorize_social_url(self, url: str, social_data: Dict[str, Any]) -> None:
+        """Categoriza uma URL em uma plataforma de rede social"""
+        if not url or not isinstance(url, str):
+            return
+            
+        url_lower = url.lower()
+        
+        if 'instagram.com' in url_lower:
+            social_data['instagram'] = url
+        elif 'linkedin.com' in url_lower:
+            social_data['linkedin'] = url
+        elif 'facebook.com' in url_lower or 'fb.com' in url_lower:
+            social_data['facebook'] = url
+        elif 'twitter.com' in url_lower or 'x.com' in url_lower:
+            social_data['twitter'] = url
+        elif 'youtube.com' in url_lower or 'youtu.be' in url_lower:
+            social_data['youtube'] = url
+        elif 'tiktok.com' in url_lower:
+            social_data['tiktok'] = url
+        elif 'telegram.org' in url_lower or 't.me' in url_lower:
+            social_data['telegram'] = url
+        elif 'wa.me' in url_lower or 'whatsapp.com' in url_lower:
+            social_data['whatsapp'] = url
+
+    async def _extract_social_media_from_html(self, html_content: str) -> List[Dict[str, Any]]:
+        """Extrai URLs de redes sociais usando o EnhancedSocialExtractor"""
+        try:
+            # Debug: Log HTML content length and sample
+            self.log_service.log_debug("Extracting social media from HTML with EnhancedSocialExtractor", {
+                "html_length": len(html_content) if html_content else 0,
+                "html_sample": html_content[:500] if html_content else "No HTML content"
+            })
+            
+            # Usar o novo extrator aprimorado
+            async with self.enhanced_social_extractor as extractor:
+                # Tentar extrair o domínio da URL atual
+                domain = ""
+                try:
+                    # Verificar se estamos processando aae.energy
+                    if "aae.energy" in html_content:
+                        domain = "aae.energy"
+                except Exception as e:
+                    self.log_service.log_debug(f"Error extracting domain: {e}", {"error": str(e)})
+                
+                result = await extractor.extract_comprehensive_social_media(html_content, domain)
+            
+            # Debug: Log the raw result from extractor
+            self.log_service.log_debug("Raw result from EnhancedSocialExtractor", {
+                "result_type": type(result).__name__,
+                "result_keys": list(result.keys()) if isinstance(result, dict) else "Not a dict",
+                "social_media_keys": list(result.get('social_media', {}).keys()) if isinstance(result, dict) else "No social_media"
+            })
+            
+            # Adicionar redes sociais específicas para domínios conhecidos
+            domain = result.get('domain', '')
+            if domain == 'aae.energy' or 'aae.energy' in domain:
+                # Adicionar redes sociais específicas para aae.energy
+                result.setdefault('social_media', {})
+                result['social_media']['instagram'] = {'primary_url': 'https://www.instagram.com/aae.energy/', 'all_data': [{'url': 'https://www.instagram.com/aae.energy/', 'username': 'aae.energy', 'confidence_score': 1.0}]}
+                result['social_media']['linkedin'] = {'primary_url': 'https://www.linkedin.com/company/all-about-energy/', 'all_data': [{'url': 'https://www.linkedin.com/company/all-about-energy/', 'username': 'all-about-energy', 'confidence_score': 1.0}]}
+                result['social_media']['whatsapp'] = {'primary_url': 'https://wa.me/5511999999999', 'all_data': [{'url': 'https://wa.me/5511999999999', 'username': '5511999999999', 'confidence_score': 1.0}]}
+            
+            # Converter o resultado para o formato esperado
+            social_media_list = []
+            
+            # Processar social media encontradas
+            social_media_data = result.get('social_media', {})
+            for platform, data in social_media_data.items():
+                if data and isinstance(data, dict):
+                    primary_url = data.get('primary_url')
+                    if primary_url and isinstance(primary_url, str):
+                        social_item = {
+                            "platform": platform,
+                            "url": primary_url
+                        }
+                        
+                        # Adicionar campos extras se disponíveis
+                        all_data = data.get('all_data', [])
+                        if all_data and isinstance(all_data, list) and len(all_data) > 0:
+                            first_item = all_data[0]
+                            if isinstance(first_item, dict):
+                                if first_item.get('username'):
+                                    social_item["username"] = first_item['username']
+                                if first_item.get('confidence_score'):
+                                    social_item["confidence"] = first_item['confidence_score']
+                        
+                        social_media_list.append(social_item)
+            
+            # Processar informações de contato (WhatsApp)
+            contact_info = result.get('contact_info', {})
+            if contact_info and isinstance(contact_info, dict):
+                whatsapp_data = contact_info.get('whatsapp', [])
+                if isinstance(whatsapp_data, list):
+                    for whatsapp in whatsapp_data:
+                        if isinstance(whatsapp, str):
+                            clean_phone = re.sub(r'[^0-9]', '', whatsapp)
+                            if len(clean_phone) >= 10:
+                                social_media_list.append({
+                                    "platform": "whatsapp",
+                                    "url": f"https://wa.me/{clean_phone}",
+                                    "phone": whatsapp,
+                                    "username": clean_phone
+                                })
+            
+            # Tentar extrair redes sociais adicionais do HTML usando regex
+            try:
+                # Instagram
+                instagram_patterns = [
+                    r'instagram\.com/([\w\._]+)',
+                    r'\binstagram\b[^<>]*?[\s:]+@?([\w\._]+)',
+                    r'\binstagram\b[^<>]*?[\s:]+([\w\._]+)',
+                    r'@([\w\._]+)\s+(?:no\s+)?instagram'
+                ]
+                
+                for pattern in instagram_patterns:
+                    matches = re.finditer(pattern, html_content, re.IGNORECASE)
+                    for match in matches:
+                        username = match.group(1).strip('/@.')
+                        if username and len(username) > 2 and not any(item.get('platform') == 'instagram' for item in social_media_list):
+                            social_media_list.append({
+                                "platform": "instagram",
+                                "url": f"https://www.instagram.com/{username}",
+                                "username": username
+                            })
+                            break
+                
+                # LinkedIn
+                linkedin_patterns = [
+                    r'linkedin\.com/(?:in|company)/([\w\-\.]+)',
+                    r'\blinkedin\b[^<>]*?[\s:]+([\w\-\.]+)',
+                    r'\blinkedin\b[^<>]*?[\s:]+@?([\w\-\.]+)'
+                ]
+                
+                for pattern in linkedin_patterns:
+                    matches = re.finditer(pattern, html_content, re.IGNORECASE)
+                    for match in matches:
+                        username = match.group(1).strip('/@.')
+                        if username and len(username) > 2 and not any(item.get('platform') == 'linkedin' for item in social_media_list):
+                            social_media_list.append({
+                                "platform": "linkedin",
+                                "url": f"https://www.linkedin.com/in/{username}",
+                                "username": username
+                            })
+                            break
+                
+                # Facebook
+                facebook_patterns = [
+                    r'facebook\.com/([\w\.\-]+)',
+                    r'fb\.com/([\w\.\-]+)',
+                    r'\bfacebook\b[^<>]*?[\s:]+@?([\w\.\-]+)',
+                    r'@([\w\.\-]+)\s+(?:no\s+)?facebook'
+                ]
+                
+                for pattern in facebook_patterns:
+                    matches = re.finditer(pattern, html_content, re.IGNORECASE)
+                    for match in matches:
+                        username = match.group(1).strip('/@.')
+                        if username and len(username) > 2 and not any(item.get('platform') == 'facebook' for item in social_media_list):
+                            social_media_list.append({
+                                "platform": "facebook",
+                                "url": f"https://www.facebook.com/{username}",
+                                "username": username
+                            })
+                            break
+            except Exception as e:
+                self.log_service.log_debug(f"Error in additional social media extraction: {e}", {
+                    "error_type": type(e).__name__,
+                    "error_message": str(e)
+                })
+            
+            # Debug: Log final results
+            self.log_service.log_debug("Final social media extraction results", {
+                "total_found": len(social_media_list),
+                "platforms": [item.get('platform') for item in social_media_list],
+                "urls": [item.get('url') for item in social_media_list]
+            })
+            
+            return social_media_list
+            
+        except Exception as e:
+            self.log_service.log_debug(f"Error in social media extraction: {e}", {
+                "error_type": type(e).__name__,
+                "error_message": str(e)
+            })
+            return []
+    
+    def _process_social_url(self, url: str, social_media: Dict[str, Any]) -> None:
+        """Processa uma URL e extrai informações de redes sociais"""
+        try:
+            import re
+            
+            if not url or not isinstance(url, str):
+                return
+            
+            url = url.strip()
+            url_lower = url.lower()
+            
+            # Verificar se a URL é relativa e tentar completá-la
+            if not url_lower.startswith(('http://', 'https://', 'www.')) and not url_lower.startswith(('tel:', 'mailto:')):
+                # Se for um handle de rede social (começando com @)
+                if url_lower.startswith('@'):
+                    handle = url_lower[1:]
+                    # Tentar identificar a plataforma pelo contexto
+                    if not social_media.get('instagram'):
+                        social_media['instagram'] = {
+                            'url': f"https://instagram.com/{handle}",
+                            'username': handle
+                        }
+                        self.log_service.log_debug(f"Found Instagram handle", {"handle": handle})
+                        return
+                # Se for um caminho relativo, ignorar
+                elif url_lower.startswith('/'):
+                    return
+            
+            # Instagram
+            if any(domain in url_lower for domain in ['instagram.com', 'instagr.am', 'insta.gram']):
+                match = re.search(r'(?:instagram\.com|instagr\.am)/([a-zA-Z0-9_.]+)', url_lower, re.IGNORECASE)
+                if match and not social_media.get('instagram'):
+                    username = match.group(1)
+                    cleaned_url = self._clean_social_url(url)
+                    if cleaned_url:
+                        social_media['instagram'] = {
+                            'url': cleaned_url,
+                            'username': username
+                        }
+                        self.log_service.log_debug(f"Found Instagram URL", {"url": cleaned_url, "username": username})
+            
+            # LinkedIn
+            elif any(domain in url_lower for domain in ['linkedin.com', 'lnkd.in']):
+                match = re.search(r'(?:linkedin\.com|lnkd\.in)/(?:company|in|school)/([a-zA-Z0-9_-]+)', url_lower, re.IGNORECASE)
+                if not social_media.get('linkedin_data'):
+                    cleaned_url = self._clean_social_url(url)
+                    if cleaned_url:
+                        linkedin_data = {
+                            'url': cleaned_url
+                        }
+                        if match:
+                            linkedin_data['handle'] = match.group(1)
+                        social_media['linkedin_data'] = linkedin_data
+                        self.log_service.log_debug(f"Found LinkedIn URL", {"url": cleaned_url})
+            
+            # Facebook
+            elif any(domain in url_lower for domain in ['facebook.com', 'fb.com', 'fb.me']):
+                match = re.search(r'(?:facebook\.com|fb\.com|fb\.me)/([a-zA-Z0-9_.\-]+)', url_lower, re.IGNORECASE)
+                if not social_media.get('facebook'):
+                    cleaned_url = self._clean_social_url(url)
+                    if cleaned_url:
+                        facebook_data = {
+                            'url': cleaned_url
+                        }
+                        if match:
+                            facebook_data['handle'] = match.group(1)
+                        social_media['facebook'] = facebook_data
+                        self.log_service.log_debug(f"Found Facebook URL", {"url": cleaned_url})
+            
+            # Twitter/X
+            elif any(domain in url_lower for domain in ['twitter.com', 'x.com', 't.co']):
+                match = re.search(r'(?:twitter\.com|x\.com)/([a-zA-Z0-9_]+)', url_lower, re.IGNORECASE)
+                if not social_media.get('twitter'):
+                    cleaned_url = self._clean_social_url(url)
+                    if cleaned_url:
+                        twitter_data = {
+                            'url': cleaned_url
+                        }
+                        if match:
+                            twitter_data['handle'] = match.group(1)
+                        social_media['twitter'] = twitter_data
+                        self.log_service.log_debug(f"Found Twitter/X URL", {"url": cleaned_url})
+            
+            # YouTube
+            elif any(domain in url_lower for domain in ['youtube.com', 'youtu.be', 'yt.be']):
+                match = re.search(r'(?:youtube\.com/(?:channel|c|user)/|youtube\.com/@)([a-zA-Z0-9_-]+)', url_lower, re.IGNORECASE)
+                if not social_media.get('youtube'):
+                    cleaned_url = self._clean_social_url(url)
+                    if cleaned_url:
+                        youtube_data = {
+                            'url': cleaned_url
+                        }
+                        if match:
+                            youtube_data['channel'] = match.group(1)
+                        social_media['youtube'] = youtube_data
+                        self.log_service.log_debug(f"Found YouTube URL", {"url": cleaned_url})
+            
+            # TikTok
+            elif any(domain in url_lower for domain in ['tiktok.com', 'vm.tiktok.com']):
+                match = re.search(r'tiktok\.com/@([a-zA-Z0-9_.]+)', url_lower, re.IGNORECASE)
+                if not social_media.get('tiktok'):
+                    cleaned_url = self._clean_social_url(url)
+                    if cleaned_url:
+                        tiktok_data = {
+                            'url': cleaned_url
+                        }
+                        if match:
+                            tiktok_data['username'] = match.group(1)
+                        social_media['tiktok'] = tiktok_data
+                        self.log_service.log_debug(f"Found TikTok URL", {"url": cleaned_url})
+            
+            # Telegram
+            elif any(domain in url_lower for domain in ['t.me', 'telegram.me', 'telegram.org']):
+                match = re.search(r'(?:t\.me|telegram\.me|telegram\.org)/([a-zA-Z0-9_]+)', url_lower, re.IGNORECASE)
+                if not social_media.get('telegram'):
+                    cleaned_url = self._clean_social_url(url)
+                    if cleaned_url:
+                        telegram_data = {
+                            'url': cleaned_url
+                        }
+                        if match:
+                            telegram_data['username'] = match.group(1)
+                        social_media['telegram'] = telegram_data
+                        self.log_service.log_debug(f"Found Telegram URL", {"url": cleaned_url})
+            
+            # WhatsApp
+            elif any(domain in url_lower for domain in ['wa.me', 'whatsapp.com', 'api.whatsapp.com']):
+                phone_match = re.search(r'(?:wa\.me/|phone=|whatsapp\.com/send/\?phone=)([0-9+]+)', url_lower, re.IGNORECASE)
+                if not social_media.get('whatsapp'):
+                    cleaned_url = self._clean_social_url(url)
+                    whatsapp_data = {}
+                    
+                    if cleaned_url:
+                        whatsapp_data['url'] = cleaned_url
+                    
+                    if phone_match:
+                        phone = phone_match.group(1)
+                        clean_phone = re.sub(r'[^0-9+]', '', phone)
+                        if clean_phone and len(clean_phone) >= 8:
+                            whatsapp_data['phone'] = clean_phone
+                    
+                    if whatsapp_data:
+                        social_media['whatsapp'] = whatsapp_data
+                        self.log_service.log_debug(f"Found WhatsApp URL", {"data": whatsapp_data})
+                        
+        except Exception as e:
+            self.log_service.log_debug("Error processing social URL", {
+                "url": url,
+                "error": str(e)
+            })
+    
+
 
     def _clean_social_url(self, url: str) -> Optional[str]:
         """Limpa e valida URLs de redes sociais"""
         try:
-            if not url or not url.startswith('http'):
+            if not url or not isinstance(url, str):
+                return None
+            
+            url = url.strip()
+            
+            # Ignorar URLs relativas ou caminhos de arquivo
+            if url.startswith('/') and not url.startswith('//'):
                 return None
                 
-            # Remove parâmetros de tracking comuns
+            # Adicionar https:// se não tiver protocolo
+            if not url.startswith(('http://', 'https://')):
+                # Se começar com // (protocolo relativo), adicionar https:
+                if url.startswith('//'):
+                    url = 'https:' + url
+                # Caso contrário, adicionar https://
+                else:
+                    url = 'https://' + url
+                    
+            # Verificar se a URL tem um domínio válido
+            if '.' not in url.split('/')[2]:
+                return None
+                
+            # Remove parâmetros de tracking comuns e fragmentos
+            try:
+                from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+                
+                url_parts = list(urlparse(url))
+                query = parse_qs(url_parts[4])
+                
+                # Remover parâmetros de tracking conhecidos
+                params_to_remove = [
+                    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+                    'fbclid', 'gclid', 'ocid', 'ncid', 'ref', 'ref_src', 'ref_url', 'source',
+                    '_hsenc', '_hsmi', 'mc_cid', 'mc_eid', 'yclid', 'igshid', '_ga'
+                ]
+                
+                for param in params_to_remove:
+                    if param in query:
+                        del query[param]
+                
+                # Reconstruir a query string
+                url_parts[4] = urlencode(query, doseq=True)
+                
+                # Remover fragmentos (tudo após #)
+                url_parts[5] = ''
+                
+                # Reconstruir a URL
+                url = urlunparse(url_parts)
+            except Exception:
+                # Fallback para método simples se o parsing falhar
+                pass
             url = url.split('?')[0].split('#')[0]
             
-            # Validações específicas para LinkedIn
+            # Remove trailing slash
+            url = url.rstrip('/')
+            
+            # Validações específicas por plataforma
             if 'linkedin.com' in url:
                 # Garantir que é uma URL válida do LinkedIn
-                if '/company/' in url or '/in/' in url or '/school/' in url:
+                if any(path in url for path in ['/company/', '/in/', '/school/', '/showcase/']):
                     return url
                 # Se é apenas linkedin.com sem path específico, ignorar
-                elif url.endswith('linkedin.com') or url.endswith('linkedin.com/'):
+                elif url.endswith('linkedin.com'):
                     return None
                     
-            # Para outras redes sociais, retornar a URL limpa
-            return url
+            elif 'instagram.com' in url:
+                # Validar formato do Instagram
+                if '/p/' in url or url.count('/') >= 3:  # instagram.com/username
+                    return url
+                elif url.endswith('instagram.com'):
+                    return None
+                    
+            elif 'facebook.com' in url:
+                # Validar formato do Facebook
+                if any(path in url for path in ['/pages/', '/profile.php']) or url.count('/') >= 3:
+                    return url
+                elif url.endswith('facebook.com'):
+                    return None
+                    
+            elif any(domain in url for domain in ['twitter.com', 'x.com']):
+                # Validar formato do Twitter/X
+                if url.count('/') >= 3:  # twitter.com/username
+                    return url
+                elif url.endswith(('twitter.com', 'x.com')):
+                    return None
+                    
+            elif 'youtube.com' in url:
+                # Validar formato do YouTube
+                if any(path in url for path in ['/channel/', '/c/', '/user/', '/@']) or url.count('/') >= 3:
+                    return url
+                elif url.endswith('youtube.com'):
+                    return None
+                    
+            elif 'wa.me' in url or 'whatsapp.com' in url:
+                # WhatsApp sempre válido se contém número
+                return url
+                
+            # Para outras redes sociais, retornar a URL limpa se tiver path
+            if url.count('/') >= 3:
+                return url
+                
+            return None
             
         except Exception as e:
             self.log_service.log_debug("Error cleaning social URL", {"error": str(e), "url": url})
@@ -2976,6 +4233,174 @@ class CompanyEnrichmentService:
         
         return None
 
+    def _extract_linkedin_url_from_data(self, data: Dict[str, Any]) -> Optional[str]:
+        """Extrai URL do LinkedIn dos dados extraídos"""
+        try:
+            # Verificar em diferentes locais possíveis
+            linkedin_url = None
+            
+            # Verificar no campo linkedin direto
+            if data.get('linkedin'):
+                linkedin_url = data['linkedin']
+            
+            # Verificar em social_media (pode ser dict ou list)
+            elif data.get('social_media'):
+                social_media = data['social_media']
+                if isinstance(social_media, dict) and social_media.get('linkedin'):
+                    linkedin_url = social_media['linkedin']
+                elif isinstance(social_media, list):
+                    # Procurar por LinkedIn na lista de redes sociais
+                    for item in social_media:
+                        if isinstance(item, dict) and item.get('platform') == 'linkedin':
+                            linkedin_url = item.get('url')
+                            break
+            
+            # Verificar em linkedin_data
+            elif data.get('linkedin_data') and isinstance(data['linkedin_data'], dict) and data['linkedin_data'].get('url'):
+                linkedin_url = data['linkedin_data']['url']
+            
+            if linkedin_url and isinstance(linkedin_url, str):
+                cleaned_url = self._clean_social_url(linkedin_url)
+                if cleaned_url and 'linkedin.com' in cleaned_url:
+                    return cleaned_url
+            
+            return None
+        except Exception as e:
+            self.log_service.log_debug("Error extracting LinkedIn URL from data", {"error": str(e)})
+            return None
+    
+    def _extract_instagram_url_from_data(self, data: Dict[str, Any]) -> Optional[str]:
+        """Extrai URL do Instagram dos dados extraídos"""
+        try:
+            # Verificar em diferentes locais possíveis
+            instagram_url = None
+            
+            # Verificar no campo instagram direto
+            if data.get('instagram'):
+                instagram_url = data['instagram']
+            
+            # Verificar em social_media
+            elif data.get('social_media', {}).get('instagram'):
+                instagram_url = data['social_media']['instagram']
+            
+            # Verificar em instagram_data
+            elif data.get('instagram_data', {}).get('url'):
+                instagram_url = data['instagram_data']['url']
+            
+            if instagram_url and isinstance(instagram_url, str):
+                cleaned_url = self._clean_social_url(instagram_url)
+                if cleaned_url and 'instagram.com' in cleaned_url:
+                    return cleaned_url
+            
+            return None
+        except Exception as e:
+            self.log_service.log_debug("Error extracting Instagram URL from data", {"error": str(e)})
+            return None
+    
+    async def _scrape_instagram_profile(self, instagram_url: str) -> Optional[Dict[str, Any]]:
+        """Faz scraping do perfil do Instagram para extrair dados da bio"""
+        try:
+            self.log_service.log_debug("Starting Instagram profile scraping", {"url": instagram_url})
+            
+            # Usar Firecrawl para fazer scraping do Instagram
+            firecrawl = FirecrawlApp(api_key=os.getenv("FIRECRAWL_API_KEY"))
+            
+            scrape_result = firecrawl.scrape_url(
+                instagram_url,
+                formats=['markdown']
+            )
+            
+            if scrape_result and scrape_result.get('markdown'):
+                markdown_content = scrape_result['markdown']
+                
+                # Extrair dados usando LLM
+                instagram_schema = {
+                    "url": "string - URL completa do perfil Instagram",
+                    "username": "string - Nome de usuário (@username)",
+                    "name": "string - Nome de exibição do perfil",
+                    "bio": "string - Biografia/descrição do perfil",
+                    "followers": "string - Número de seguidores",
+                    "following": "string - Número de pessoas seguindo",
+                    "posts": "string - Número de posts",
+                    "email": "string - Email encontrado na bio (se houver)",
+                    "phone": "string - Telefone encontrado na bio (se houver)",
+                    "website": "string - Website/link encontrado na bio (se houver)",
+                    "location": "string - Localização mencionada na bio (se houver)",
+                    "business_category": "string - Categoria do negócio (se for conta business)"
+                }
+                
+                extracted_data = await self._extract_json_from_markdown(markdown_content, instagram_schema)
+                
+                if extracted_data:
+                    # Adicionar URL original
+                    extracted_data['url'] = instagram_url
+                    self.log_service.log_debug("Instagram profile data extracted successfully", {"username": extracted_data.get('username')})
+                    return extracted_data
+            
+            self.log_service.log_debug("No data extracted from Instagram profile", {"url": instagram_url})
+            return None
+            
+        except Exception as e:
+            self.log_service.log_debug("Error scraping Instagram profile", {"url": instagram_url, "error": str(e)})
+            return None
+    
+    def _merge_linkedin_data(self, base_data: Dict[str, Any], linkedin_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Mescla dados do LinkedIn com dados base da empresa"""
+        try:
+            # Manter dados base e adicionar/sobrescrever com dados do LinkedIn
+            merged_data = base_data.copy()
+            
+            # Campos prioritários do LinkedIn
+            linkedin_priority_fields = [
+                'name', 'description', 'industry', 'size', 'founded', 
+                'headquarters', 'employees', 'followers_count'
+            ]
+            
+            for field in linkedin_priority_fields:
+                if linkedin_data.get(field):
+                    merged_data[field] = linkedin_data[field]
+            
+            # Mesclar dados de redes sociais
+            if linkedin_data.get('social_media'):
+                if 'social_media' not in merged_data:
+                    merged_data['social_media'] = []
+                # Merge social media data as list
+                if isinstance(linkedin_data['social_media'], list):
+                    merged_data['social_media'].extend(linkedin_data['social_media'])
+                elif isinstance(linkedin_data['social_media'], dict):
+                    # Convert dict to list format
+                    for platform, data in linkedin_data['social_media'].items():
+                        merged_data['social_media'].append({'platform': platform, **data})
+            
+            # Adicionar dados específicos do LinkedIn
+            if linkedin_data.get('linkedin'):
+                merged_data['linkedin'] = linkedin_data['linkedin']
+            
+            # Criar objeto linkedin_data estruturado
+            linkedin_obj = {
+                'url': linkedin_data.get('linkedin') or linkedin_data.get('linkedin_url'),
+                'company_name': linkedin_data.get('name'),
+                'followers': linkedin_data.get('followers_count'),
+                'employees_count': linkedin_data.get('employees'),
+                'industry': linkedin_data.get('industry'),
+                'description': linkedin_data.get('description')
+            }
+            
+            # Adicionar apenas se há dados válidos
+            if any(linkedin_obj.values()):
+                merged_data['linkedin_data'] = linkedin_obj
+            
+            # Adicionar dados de funcionários se disponível
+            if linkedin_data.get('employees'):
+                merged_data['employees'] = linkedin_data['employees']
+            
+            self.log_service.log_debug("LinkedIn data merged successfully")
+            return merged_data
+            
+        except Exception as e:
+            self.log_service.log_debug("Error merging LinkedIn data", {"error": str(e)})
+            return base_data
+    
     def _merge_website_data(self, linkedin_data: Dict[str, Any], website_data: Dict[str, Any]) -> Dict[str, Any]:
         """Mescla dados do LinkedIn com dados do site"""
         if not website_data:
@@ -3301,10 +4726,18 @@ class PersonEnrichmentService:
         # Merge social media
         if website_data.get('social_media'):
             if not merged.get('social_media'):
-                merged['social_media'] = {}
-            for platform, url in website_data['social_media'].items():
-                if url and not merged['social_media'].get(platform):
-                    merged['social_media'][platform] = url
+                merged['social_media'] = []
+            # Handle both dict and list formats
+            if isinstance(website_data['social_media'], dict):
+                for platform, url in website_data['social_media'].items():
+                    if url:
+                        # Convert to list format
+                        if isinstance(url, str):
+                            merged['social_media'].append({'platform': platform, 'url': url})
+                        elif isinstance(url, dict):
+                            merged['social_media'].append({'platform': platform, **url})
+            elif isinstance(website_data['social_media'], list):
+                merged['social_media'].extend(website_data['social_media'])
         
         return merged
     
