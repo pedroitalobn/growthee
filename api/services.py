@@ -3351,15 +3351,9 @@ class CompanyEnrichmentService:
             
             # Adicionar redes sociais específicas para domínios conhecidos
             domain = result.get('domain', '')
-            if domain == 'aae.energy' or 'aae.energy' in domain:
-                # Adicionar redes sociais específicas para aae.energy com dados extraídos diretamente do site
-                result.setdefault('social_media', {})
-                result['social_media']['instagram'] = {'primary_url': 'https://www.instagram.com/allaboutenergy/', 'all_data': [{'url': 'https://www.instagram.com/allaboutenergy/', 'username': 'allaboutenergy', 'confidence_score': 1.0}]}
-                result['social_media']['linkedin'] = {'primary_url': 'https://www.linkedin.com/company/aae-digital/', 'all_data': [{'url': 'https://www.linkedin.com/company/aae-digital/', 'username': 'aae-digital', 'confidence_score': 1.0}]}
-                result['social_media']['twitter'] = {'primary_url': 'http://x.com/allabout_energy', 'all_data': [{'url': 'http://x.com/allabout_energy', 'username': 'allabout_energy', 'confidence_score': 1.0}]}
-                # Usar o número de telefone correto para WhatsApp
-                whatsapp_phone = '5511951991009'
-                result['social_media']['whatsapp'] = {'primary_url': f'https://wa.me/{whatsapp_phone}', 'all_data': [{'url': f'https://wa.me/{whatsapp_phone}', 'username': whatsapp_phone, 'confidence_score': 1.0}]}
+            # Processamento agnóstico de redes sociais para qualquer domínio
+            # Os dados de redes sociais devem ser extraídos dinamicamente do conteúdo HTML
+            # sem hardcoding para domínios específicos
             
             # Converter o resultado para o formato esperado
             social_media_list = []

@@ -70,20 +70,7 @@ async def enrich_company(request: CompanyRequest):
         if "error" in result:
             response_data["error"] = result["error"]
             
-        # Adicionar redes sociais específicas para domínios conhecidos
-        if request.domain == "aae.energy":
-            # Adicionar redes sociais específicas para aae.energy
-            response_data["social_media"] = [
-                {"platform": "instagram", "url": "https://www.instagram.com/allaboutenergy/", "username": "allaboutenergy"},
-                {"platform": "linkedin", "url": "https://www.linkedin.com/company/aae-digital/", "username": "aae-digital"},
-                {"platform": "twitter", "url": "http://x.com/allabout_energy", "username": "allabout_energy"},
-                {"platform": "whatsapp", "url": "https://wa.me/5511951991009", "phone": "5511951991009"}
-            ]
-            
-            # Atualizar também os campos individuais
-            response_data["instagram"] = {"url": "https://www.instagram.com/allaboutenergy/", "username": "allaboutenergy"}
-            response_data["linkedin_data"] = {"url": "https://www.linkedin.com/company/aae-digital/", "company_name": "All About Energy"}
-            response_data["whatsapp"] = {"phone": "5511951991009", "url": "https://wa.me/5511951991009", "business_name": "All About Energy"}
+        # Processar dados de redes sociais de forma agnóstica ao domínio
         
         # Processar campos de redes sociais para garantir que sejam objetos JSON válidos
         if "social_media" in response_data:
