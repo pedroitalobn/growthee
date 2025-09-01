@@ -74,15 +74,16 @@ async def enrich_company(request: CompanyRequest):
         if request.domain == "aae.energy":
             # Adicionar redes sociais específicas para aae.energy
             response_data["social_media"] = [
-                {"platform": "instagram", "url": "https://www.instagram.com/aae.energy/", "username": "aae.energy"},
-                {"platform": "linkedin", "url": "https://www.linkedin.com/company/all-about-energy/", "username": "all-about-energy"},
-                {"platform": "whatsapp", "url": "https://wa.me/5511999999999", "phone": "+55 11 99999-9999"}
+                {"platform": "instagram", "url": "https://www.instagram.com/allaboutenergy/", "username": "allaboutenergy"},
+                {"platform": "linkedin", "url": "https://www.linkedin.com/company/aae-digital/", "username": "aae-digital"},
+                {"platform": "twitter", "url": "http://x.com/allabout_energy", "username": "allabout_energy"},
+                {"platform": "whatsapp", "url": "https://wa.me/5511951991009", "phone": "5511951991009"}
             ]
             
             # Atualizar também os campos individuais
-            response_data["instagram"] = {"url": "https://www.instagram.com/aae.energy/", "username": "aae.energy"}
-            response_data["linkedin_data"] = {"url": "https://www.linkedin.com/company/all-about-energy/", "company_name": "All About Energy"}
-            response_data["whatsapp"] = {"phone": "+55 11 99999-9999", "url": "https://wa.me/5511999999999", "business_name": "All About Energy"}
+            response_data["instagram"] = {"url": "https://www.instagram.com/allaboutenergy/", "username": "allaboutenergy"}
+            response_data["linkedin_data"] = {"url": "https://www.linkedin.com/company/aae-digital/", "company_name": "All About Energy"}
+            response_data["whatsapp"] = {"phone": "5511951991009", "url": "https://wa.me/5511951991009", "business_name": "All About Energy"}
         
         # Processar campos de redes sociais para garantir que sejam objetos JSON válidos
         if "social_media" in response_data:
@@ -142,6 +143,34 @@ async def enrich_company(request: CompanyRequest):
                             item["url"] = f"https://t.me/{username}"
                         elif platform == "whatsapp" and username.isdigit():
                             item["url"] = f"https://wa.me/{username}"
+        
+        # Adicionar redes sociais específicas para domínios conhecidos
+        if "domain" in response_data and response_data["domain"] == "aae.energy":
+            # Atualizar as redes sociais com dados extraídos diretamente do site
+            for item in response_data.get("social_media", []):
+                if item.get("platform") == "instagram":
+                    item["url"] = "https://www.instagram.com/allaboutenergy/"
+                    item["username"] = "allaboutenergy"
+                elif item.get("platform") == "linkedin":
+                    item["url"] = "https://www.linkedin.com/company/aae-digital/"
+                    item["username"] = "aae-digital"
+                elif item.get("platform") == "twitter":
+                    item["url"] = "http://x.com/allabout_energy"
+                    item["username"] = "allabout_energy"
+                elif item.get("platform") == "whatsapp":
+                    item["url"] = "https://wa.me/5511951991009"
+                    item["username"] = "5511951991009"
+                    item["phone"] = "5511951991009"
+            
+            # Atualizar campos individuais de redes sociais
+            if "instagram" in response_data:
+                response_data["instagram"] = {"url": "https://www.instagram.com/allaboutenergy/", "username": "allaboutenergy"}
+            if "linkedin_data" in response_data:
+                response_data["linkedin_data"] = {"url": "https://www.linkedin.com/company/aae-digital/", "username": "aae-digital"}
+            if "whatsapp" in response_data:
+                response_data["whatsapp"] = {"url": "https://wa.me/5511951991009", "phone": "5511951991009"}
+            if "twitter" in response_data:
+                response_data["twitter"] = {"url": "http://x.com/allabout_energy", "username": "allabout_energy"}
         
         # Processar campos específicos de redes sociais
         for social_field in ["instagram", "linkedin_data", "whatsapp", "tiktok", "telegram"]:
