@@ -19,6 +19,36 @@ log_service = LogService()
 instagram_scraper = HyperbrowserInstagramScraperService(log_service=log_service)
 firecrawl_client = FirecrawlApp()
 
+# Função auxiliar para converter strings de números para inteiros
+def _convert_to_int(value: Optional[str]) -> Optional[int]:
+    """Converte strings de números (ex: '1.2k', '3,400') para inteiros"""
+    if not value or not isinstance(value, str):
+        return None
+        
+    try:
+        # Remover caracteres não numéricos, exceto pontos e vírgulas
+        clean_value = re.sub(r'[^0-9.,]', '', value)
+        
+        # Converter abreviações como 'k', 'm'
+        if 'k' in value.lower():
+            # Converter para milhares
+            multiplier = 1000
+            clean_value = clean_value.replace(',', '.')
+        elif 'm' in value.lower():
+            # Converter para milhões
+            multiplier = 1000000
+            clean_value = clean_value.replace(',', '.')
+        else:
+            # Número normal
+            multiplier = 1
+            clean_value = clean_value.replace(',', '')
+        
+        # Converter para float e depois para int
+        return int(float(clean_value) * multiplier)
+        
+    except (ValueError, TypeError):
+        return None
+
 # Modelos de dados
 class InstagramScrapeRequest(BaseModel):
     url: HttpUrl
@@ -45,8 +75,119 @@ async def scrape_instagram(request: InstagramScrapeRequest):
         # Inicializar resultado padrão
         result_data = {"profile_url": normalized_url, "username": username.group(1)}
         
+        # Definir schema para extração estruturada
+        instagram_schema = {
+            "type": "object",
+            "properties": {
+                "username": {"type": "string", "description": "Nome de usuário (@username) sem o @"},
+                "name": {"type": "string", "description": "Nome de exibição do perfil"},
+                "bio": {"type": "string", "description": "Biografia/descrição do perfil"},
+                "followers": {"type": "string", "description": "Número de seguidores"},
+                "following": {"type": "string", "description": "Número de pessoas seguindo"},
+                "posts": {"type": "string", "description": "Número de posts"},
+                "email": {"type": "string", "description": "Email encontrado na bio (se houver)"},
+                "phone": {"type": "string", "description": "Telefone encontrado na bio (se houver)"},
+                "website": {"type": "string", "description": "Website/link encontrado na bio (se houver)"},
+                "location": {"type": "string", "description": "Localização mencionada na bio (se houver)"},
+                "business_category": {"type": "string", "description": "Categoria do negócio (se for conta business)"}
+            },
+            "required": ["username", "name"]
+        }
+        
         try:
-            # Fazer scraping usando o serviço especializado
+            # Primeiro tentar com Firecrawl
+            try:
+                # Tentar extração estruturada diretamente com Firecrawl V2
+                structured_data = firecrawl_client.extract_structured_data(
+                    normalized_url, 
+                    instagram_schema, 
+                    use_deepseek=True
+                )
+                
+                if "error" not in structured_data:
+                    # Processar dados numéricos
+                    structured_data["followers_count"] = _convert_to_int(structured_data.get("followers"))
+                    structured_data["following_count"] = _convert_to_int(structured_data.get("following"))
+                    structured_data["posts_count"] = _convert_to_int(structured_data.get("posts"))
+                    
+                    # Adicionar URL original
+                    structured_data["profile_url"] = normalized_url
+                    return structured_data
+                else:
+                    logger.error(f"Erro na extração estruturada com Firecrawl V2: {structured_data.get('error')}")
+                    result_data["error"] = structured_data.get("error")
+                    
+                    # Tentar com scrape_url + extract_structured_data_from_html como fallback
+                    try:
+                        html_content = firecrawl_client.scrape_url(normalized_url)
+                        
+                        if html_content and isinstance(html_content, str) and html_content.strip():
+                            # Extrair dados estruturados do HTML
+                            html_structured_data = firecrawl_client.extract_structured_data_from_html(html_content, instagram_schema, use_deepseek=True)
+                            
+                            if "error" not in html_structured_data:
+                                # Processar dados numéricos
+                                html_structured_data["followers_count"] = _convert_to_int(html_structured_data.get("followers"))
+                                html_structured_data["following_count"] = _convert_to_int(html_structured_data.get("following"))
+                                html_structured_data["posts_count"] = _convert_to_int(html_structured_data.get("posts"))
+                                
+                                # Adicionar URL original
+                                html_structured_data["profile_url"] = normalized_url
+                                return html_structured_data
+                        else:
+                            logger.error("Falha ao extrair HTML com Firecrawl")
+                    except Exception as html_extract_error:
+                        logger.error(f"Erro no fallback de extração HTML: {str(html_extract_error)}")
+            except Exception as firecrawl_error:
+                logger.error(f"Erro no Firecrawl: {str(firecrawl_error)}")
+                result_data["error"] = f"Erro no Firecrawl: {str(firecrawl_error)}"
+            
+            # Se Firecrawl falhar, tentar com Crawl4AI
+            try:
+                from crawl4ai import AsyncWebCrawler
+                
+                async with AsyncWebCrawler(verbose=False) as crawler:
+                    result = await crawler.arun(
+                        url=normalized_url,
+                        word_count_threshold=10,
+                        bypass_cache=True,
+                        wait_for="css:.x9f619.x1n2onr6",  # Seletor comum em perfis do Instagram
+                        delay_before_return_html=5.0,
+                        page_timeout=45000,
+                        js_code=[
+                            "window.scrollTo(0, document.body.scrollHeight/3);",
+                            "await new Promise(resolve => setTimeout(resolve, 2000));",
+                            "window.scrollTo(0, document.body.scrollHeight/2);",
+                            "await new Promise(resolve => setTimeout(resolve, 2000));"
+                        ]
+                    )
+                    
+                    if result.success and result.html:
+                        html_content = result.html
+                        
+                        # Extrair dados estruturados usando Firecrawl com DeepSeek como LLM
+                        structured_data = firecrawl_client.extract_structured_data_from_html(html_content, instagram_schema, use_deepseek=True)
+                        
+                        if "error" not in structured_data:
+                            # Processar dados numéricos
+                            structured_data["followers_count"] = _convert_to_int(structured_data.get("followers"))
+                            structured_data["following_count"] = _convert_to_int(structured_data.get("following"))
+                            structured_data["posts_count"] = _convert_to_int(structured_data.get("posts"))
+                            
+                            # Adicionar URL original
+                            structured_data["profile_url"] = normalized_url
+                            return structured_data
+                        else:
+                            logger.error(f"Erro na extração estruturada com Crawl4AI+Firecrawl: {structured_data['error']}")
+                            result_data["error"] = structured_data["error"]
+                    else:
+                        logger.error("Falha ao extrair HTML com Crawl4AI")
+                        result_data["error"] = "Falha ao extrair HTML com Crawl4AI"
+            except Exception as crawl4ai_error:
+                logger.error(f"Erro no Crawl4AI: {str(crawl4ai_error)}")
+                result_data["error"] = f"Erro no Crawl4AI: {str(crawl4ai_error)}"
+            
+            # Se ambos falharem, usar o serviço especializado como fallback
             result = await instagram_scraper.scrape_profile(normalized_url)
             
             if "error" not in result:
@@ -166,17 +307,26 @@ async def scrape_linkedin(request: LinkedInScrapeRequest):
                         }
                     
                     try:
-                        # Extrair dados estruturados
-                        structured_data = firecrawl_client.extract_structured_data_from_html(html_content, schema)
+                        # Tentar extrair dados estruturados diretamente com Firecrawl V2
+                        structured_data = firecrawl_client.extract_structured_data(url, schema, use_deepseek=True)
                         
                         if "error" not in structured_data:
                             # Adicionar URL original
                             structured_data["profile_url"] = url
                             return structured_data
                         else:
-                            # Registrar erro e continuar com dados básicos
-                            logger.error(f"Erro na extração estruturada: {structured_data['error']}")
-                            result_data["error"] = structured_data["error"]
+                            # Tentar extrair dados estruturados do HTML com Firecrawl
+                            logger.info(f"Tentando extrair dados do HTML com Firecrawl após falha na extração direta")
+                            structured_data = firecrawl_client.extract_structured_data_from_html(html_content, schema, use_deepseek=True)
+                            
+                            if "error" not in structured_data:
+                                # Adicionar URL original
+                                structured_data["profile_url"] = url
+                                return structured_data
+                            else:
+                                # Registrar erro e continuar com dados básicos
+                                logger.error(f"Erro na extração estruturada: {structured_data['error']}")
+                                result_data["error"] = structured_data["error"]
                     except Exception as extract_error:
                         logger.error(f"Erro na extração estruturada: {str(extract_error)}")
                         result_data["error"] = f"Erro na extração estruturada: {str(extract_error)}"
@@ -270,17 +420,26 @@ async def scrape_reddit(request: RedditScrapeRequest):
                     }
                 
                 try:
-                    # Extrair dados estruturados
-                    structured_data = firecrawl_client.extract_structured_data_from_html(html_content, schema)
+                    # Tentar extrair dados estruturados diretamente com Firecrawl V2
+                    structured_data = firecrawl_client.extract_structured_data(url, schema, use_deepseek=True)
                     
                     if "error" not in structured_data:
                         # Adicionar URL original
                         structured_data["url"] = url
                         return structured_data
                     else:
-                        # Registrar erro e continuar com dados básicos
-                        logger.error(f"Erro na extração estruturada: {structured_data['error']}")
-                        result_data["error"] = structured_data["error"]
+                        # Tentar extrair dados estruturados do HTML com Firecrawl
+                        logger.info(f"Tentando extrair dados do HTML com Firecrawl após falha na extração direta")
+                        structured_data = firecrawl_client.extract_structured_data_from_html(html_content, schema, use_deepseek=True)
+                        
+                        if "error" not in structured_data:
+                            # Adicionar URL original
+                            structured_data["url"] = url
+                            return structured_data
+                        else:
+                            # Registrar erro e continuar com dados básicos
+                            logger.error(f"Erro na extração estruturada: {structured_data['error']}")
+                            result_data["error"] = structured_data["error"]
                 except Exception as extract_error:
                     logger.error(f"Erro na extração estruturada: {str(extract_error)}")
                     result_data["error"] = f"Erro na extração estruturada: {str(extract_error)}"
