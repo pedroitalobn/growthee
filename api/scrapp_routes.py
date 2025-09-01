@@ -156,7 +156,7 @@ async def scrape_linkedin(request: LinkedInScrapeRequest):
                 }
             
             # Extrair dados estruturados
-            structured_data = firecrawl_client.extract_structured_data(html_content, schema)
+            structured_data = firecrawl_client.extract_structured_data_from_html(html_content, schema)
             
             # Adicionar URL original
             structured_data["profile_url"] = url
@@ -241,7 +241,7 @@ async def scrape_reddit(request: RedditScrapeRequest):
             }
         
         # Extrair dados estruturados
-        structured_data = firecrawl_client.extract_structured_data(html_content, schema)
+        structured_data = firecrawl_client.extract_structured_data_from_html(html_content, schema)
         
         # Adicionar URL original
         structured_data["url"] = url
