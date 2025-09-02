@@ -95,7 +95,52 @@ async def scrape_instagram(request: InstagramScrapeRequest):
         }
         
         try:
-            # Primeiro tentar com Firecrawl
+            # Primeiro tentar com Crawl4AI
+            try:
+                from crawl4ai import AsyncWebCrawler
+                
+                async with AsyncWebCrawler(verbose=False) as crawler:
+                    result = await crawler.arun(
+                        url=normalized_url,
+                        word_count_threshold=10,
+                        bypass_cache=True,
+                        wait_for="css:.x9f619.x1n2onr6",  # Seletor comum em perfis do Instagram
+                        delay_before_return_html=5.0,
+                        page_timeout=45000,
+                        js_code=[
+                            "window.scrollTo(0, document.body.scrollHeight/3);",
+                            "await new Promise(resolve => setTimeout(resolve, 2000));",
+                            "window.scrollTo(0, document.body.scrollHeight/2);",
+                            "await new Promise(resolve => setTimeout(resolve, 2000));"
+                        ]
+                    )
+                    
+                    if result.success and result.html:
+                        html_content = result.html
+                        
+                        # Extrair dados estruturados usando Firecrawl com DeepSeek como LLM
+                        structured_data = firecrawl_client.extract_structured_data_from_html(html_content, instagram_schema, use_deepseek=True)
+                        
+                        if "error" not in structured_data:
+                            # Processar dados numéricos
+                            structured_data["followers_count"] = _convert_to_int(structured_data.get("followers"))
+                            structured_data["following_count"] = _convert_to_int(structured_data.get("following"))
+                            structured_data["posts_count"] = _convert_to_int(structured_data.get("posts"))
+                            
+                            # Adicionar URL original
+                            structured_data["profile_url"] = normalized_url
+                            return structured_data
+                        else:
+                            logger.error(f"Erro na extração estruturada com Crawl4AI+Firecrawl: {structured_data['error']}")
+                            result_data["error"] = structured_data["error"]
+                    else:
+                        logger.error("Falha ao extrair HTML com Crawl4AI")
+                        result_data["error"] = "Falha ao extrair HTML com Crawl4AI"
+            except Exception as crawl4ai_error:
+                logger.error(f"Erro no Crawl4AI: {str(crawl4ai_error)}")
+                result_data["error"] = f"Erro no Crawl4AI: {str(crawl4ai_error)}"
+            
+            # Se Crawl4AI falhar, tentar com Firecrawl
             try:
                 # Tentar extração estruturada diretamente com Firecrawl V2
                 structured_data = firecrawl_client.extract_structured_data(
@@ -142,83 +187,51 @@ async def scrape_instagram(request: InstagramScrapeRequest):
                 logger.error(f"Erro no Firecrawl: {str(firecrawl_error)}")
                 result_data["error"] = f"Erro no Firecrawl: {str(firecrawl_error)}"
             
-            # Se Firecrawl falhar, tentar com Crawl4AI
+            # Se ambos falharem, tentar com Hyperbrowser como último recurso
             try:
-                from crawl4ai import AsyncWebCrawler
+                # Usar o serviço especializado de scraping do Instagram
+                instagram_data = await instagram_scraper.scrape_profile(normalized_url)
                 
-                async with AsyncWebCrawler(verbose=False) as crawler:
-                    result = await crawler.arun(
-                        url=normalized_url,
-                        word_count_threshold=10,
-                        bypass_cache=True,
-                        wait_for="css:.x9f619.x1n2onr6",  # Seletor comum em perfis do Instagram
-                        delay_before_return_html=5.0,
-                        page_timeout=45000,
-                        js_code=[
-                            "window.scrollTo(0, document.body.scrollHeight/3);",
-                            "await new Promise(resolve => setTimeout(resolve, 2000));",
-                            "window.scrollTo(0, document.body.scrollHeight/2);",
-                            "await new Promise(resolve => setTimeout(resolve, 2000));"
-                        ]
-                    )
+                if instagram_data and "error" not in instagram_data:
+                    # Processar dados numéricos
+                    instagram_data["followers_count"] = _convert_to_int(instagram_data.get("followers"))
+                    instagram_data["following_count"] = _convert_to_int(instagram_data.get("following"))
+                    instagram_data["posts_count"] = _convert_to_int(instagram_data.get("posts"))
                     
-                    if result.success and result.html:
-                        html_content = result.html
-                        
-                        # Extrair dados estruturados usando Firecrawl com DeepSeek como LLM
-                        structured_data = firecrawl_client.extract_structured_data_from_html(html_content, instagram_schema, use_deepseek=True)
-                        
-                        if "error" not in structured_data:
-                            # Processar dados numéricos
-                            structured_data["followers_count"] = _convert_to_int(structured_data.get("followers"))
-                            structured_data["following_count"] = _convert_to_int(structured_data.get("following"))
-                            structured_data["posts_count"] = _convert_to_int(structured_data.get("posts"))
-                            
-                            # Adicionar URL original
-                            structured_data["profile_url"] = normalized_url
-                            return structured_data
-                        else:
-                            logger.error(f"Erro na extração estruturada com Crawl4AI+Firecrawl: {structured_data['error']}")
-                            result_data["error"] = structured_data["error"]
-                    else:
-                        logger.error("Falha ao extrair HTML com Crawl4AI")
-                        result_data["error"] = "Falha ao extrair HTML com Crawl4AI"
-            except Exception as crawl4ai_error:
-                logger.error(f"Erro no Crawl4AI: {str(crawl4ai_error)}")
-                result_data["error"] = f"Erro no Crawl4AI: {str(crawl4ai_error)}"
-            
-            # Se ambos falharem, usar o serviço especializado como fallback
-            result = await instagram_scraper.scrape_profile(normalized_url)
-            
-            if "error" not in result:
-                # Retornar dados extraídos
-                return {
-                    "username": result.get("username"),
-                    "name": result.get("name"),
-                    "bio": result.get("bio"),
-                    "posts_count": result.get("posts"),
-                    "reels_count": result.get("reels"),
-                    "followers": result.get("followers"),
-                    "following": result.get("following"),
-                    "email": result.get("email"),
-                    "phone": result.get("phone"),
-                    "website": result.get("website"),
-                    "location": result.get("location"),
-                    "business_category": result.get("business_category"),
-                    "profile_url": normalized_url
+                    # Adicionar URL original
+                    instagram_data["profile_url"] = normalized_url
+                    return instagram_data
+                else:
+                    logger.error(f"Erro no scraper especializado do Instagram: {instagram_data.get('error')}")
+                    result_data["error"] = instagram_data.get("error")
+            except Exception as instagram_scraper_error:
+                logger.error(f"Erro no scraper especializado do Instagram: {str(instagram_scraper_error)}")
+                result_data["error"] = f"Erro no scraper especializado do Instagram: {str(instagram_scraper_error)}"
+             
+             # Retornar os dados coletados até agora, mesmo que incompletos
+            return result_data
+        except Exception as e:
+                logger.error(f"Erro geral na extração de dados do Instagram: {str(e)}")
+                result_data["error"] = f"Erro geral na extração de dados do Instagram: {str(e)}"
+                return result_data
+    except Exception as outer_e:
+        logger.error(f"Erro crítico na rota de Instagram: {str(outer_e)}")
+        return {
+                    "username": None,
+                    "name": None,
+                    "bio": None,
+                    "posts_count": None,
+                    "followers": None,
+                    "following": None,
+                    "email": None,
+                    "phone": None,
+                    "website": None,
+                    "location": None,
+                    "business_category": None,
+                    "profile_url": url,
+                    "error": f"Erro crítico na rota de Instagram: {str(outer_e)}"
                 }
-            else:
-                logger.error(f"Erro no serviço de scraping do Instagram: {result['error']}")
-                result_data["error"] = result["error"]
-        except Exception as scrape_error:
-            logger.error(f"Erro no serviço de scraping do Instagram: {str(scrape_error)}")
-            result_data["error"] = f"Erro no serviço de scraping do Instagram: {str(scrape_error)}"
-        
-        # Se chegou aqui, retornar os dados básicos com erro
-        return result_data
-    except Exception as e:
-        logger.error(f"Erro ao fazer scraping do Instagram: {str(e)}")
-        return {"error": f"Erro ao processar a requisição: {str(e)}", "profile_url": url}
+                # Fim da implementação
 
 @router.post("/linkedin", response_model=Dict[str, Any])
 async def scrape_linkedin(request: LinkedInScrapeRequest):

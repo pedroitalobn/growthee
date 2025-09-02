@@ -6,6 +6,7 @@ import json
 import re
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
@@ -25,6 +26,7 @@ from .log_service import LogService
 from .models import CompanyRequest, CompanyResponse, SocialMedia, Employee
 from .enhanced_social_extractor import EnhancedSocialExtractor
 from .enhanced_linkedin_scraper import EnhancedLinkedInScraper
+from api.services.instagram_scraper import InstagramScraperService
 
 class BraveSearchRateLimiter:
     """Rate limiter para API do Brave Search"""
@@ -1129,6 +1131,10 @@ class CompanyEnrichmentService:
         self.enhanced_social_extractor = EnhancedSocialExtractor(log_service)
         # Inicializar Enhanced LinkedIn Scraper
         self.enhanced_linkedin_scraper = EnhancedLinkedInScraper(log_service)
+        # Inicializar Instagram Scraper Service
+        # Usando o scraper real do Instagram com Hyperbrowser
+        from api.services.hyperbrowser_instagram_scraper import HyperbrowserInstagramScraperService
+        self.instagram_scraper = HyperbrowserInstagramScraperService(log_service)
 
     async def enrich_company(self, company_data: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
         """Enriquece os dados de uma empresa, orquestrando a busca e o scraping"""
@@ -1619,10 +1625,10 @@ class CompanyEnrichmentService:
                     if instagram_url:
                         self.log_service.log_debug("Instagram URL found, starting profile scraping", {"instagram_url": instagram_url})
                         try:
-                            instagram_data = await self._scrape_instagram_profile(instagram_url)
-                            if instagram_data:
+                            scrape_result = await self.instagram_scraper.scrape_profile(instagram_url)
+                            if "error" not in scrape_result:
                                 # Adicionar dados do Instagram como objeto válido
-                                mapped_data['instagram'] = instagram_data
+                                mapped_data['instagram'] = scrape_result["data"]
                                 self.log_service.log_debug("Instagram data added successfully")
                         except Exception as e:
                             self.log_service.log_debug("Error during Instagram scraping", {"error": str(e)})
@@ -1904,6 +1910,139 @@ class CompanyEnrichmentService:
             })
             return {}
             
+    async def _enrich_by_instagram(self, company_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Enriquecimento via URL do Instagram"""
+        try:
+            instagram_url = company_data.get("instagram_url")
+            if not instagram_url:
+                return {}
+            
+            self.log_service.log_debug("Starting Instagram enrichment", {"instagram_url": instagram_url})
+            
+            # Extrair username do Instagram da URL
+            username = self._extract_instagram_username(instagram_url)
+            if not username:
+                self.log_service.log_debug("Invalid Instagram URL format", {"instagram_url": instagram_url})
+                return {}
+                
+            # Fazer scraping do perfil do Instagram usando o serviço dedicado
+            scrape_result = await self.instagram_scraper.scrape_profile(instagram_url)
+            if "error" in scrape_result:
+                self.log_service.log_debug("Failed to scrape Instagram profile", {"instagram_url": instagram_url, "error": scrape_result["error"]})
+                return {}
+                
+            instagram_data = scrape_result["data"]
+                
+            # Normalizar dados do Instagram para o formato esperado pela API
+            normalized_data = self._normalize_instagram_data(instagram_data)
+            normalized_data["_source"] = "instagram_scraping"
+            return normalized_data
+            
+        except Exception as e:
+            self.log_service.log_debug("Instagram enrichment error", {
+                "instagram_url": company_data.get("instagram_url"),
+                "error": str(e)
+            })
+            return {}
+            
+    def _extract_instagram_username(self, instagram_url: str) -> Optional[str]:
+        """Extrai o nome de usuário do Instagram a partir da URL"""
+        try:
+            import re
+            match = re.search(r'instagram\.com/([a-zA-Z0-9_.]+)', instagram_url, re.IGNORECASE)
+            if match:
+                return match.group(1)
+            return None
+        except Exception as e:
+            self.log_service.log_debug("Error extracting Instagram username", {"error": str(e)})
+            return None
+            
+    def _normalize_instagram_data(self, instagram_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Normaliza os dados do Instagram para o formato esperado pela API"""
+        try:
+            # Converter followers/following/posts para inteiros quando possível
+            followers = instagram_data.get("followers", "0")
+            following = instagram_data.get("following", "0")
+            posts = instagram_data.get("posts", "0")
+            
+            # Remover texto não numérico e converter para int
+            followers_count = self._extract_number(followers) if followers else 0
+            following_count = self._extract_number(following) if following else 0
+            posts_count = self._extract_number(posts) if posts else 0
+            
+            # Criar objeto Instagram no formato esperado
+            instagram_obj = {
+                "url": instagram_data.get("url", ""),
+                "name": instagram_data.get("name", ""),
+                "user": instagram_data.get("username", ""),
+                "bio": instagram_data.get("bio", ""),
+                "email": instagram_data.get("email", ""),
+                "phone": instagram_data.get("phone", ""),
+                "followers": followers_count,
+                "following": following_count,
+                "posts": posts_count
+            }
+            
+            # Criar estrutura de resposta
+            normalized_data = {
+                "name": instagram_data.get("name", ""),
+                "description": instagram_data.get("bio", ""),
+                "website": instagram_data.get("website", ""),
+                "instagram": instagram_obj,
+                "social_media": [
+                    {
+                        "platform": "instagram",
+                        "url": instagram_data.get("url", ""),
+                        "followers": followers_count
+                    }
+                ]
+            }
+            
+            # Adicionar email e telefone se disponíveis
+            if instagram_data.get("email"):
+                normalized_data["contact_info"] = {"email": instagram_data.get("email")}
+            
+            if instagram_data.get("phone"):
+                if not normalized_data.get("contact_info"):
+                    normalized_data["contact_info"] = {}
+                normalized_data["contact_info"]["phone"] = instagram_data.get("phone")
+                
+            return normalized_data
+            
+        except Exception as e:
+            self.log_service.log_debug("Error normalizing Instagram data", {"error": str(e)})
+            return {}
+            
+    def _extract_number(self, text: str) -> int:
+        """Extrai número de uma string (ex: '1.5K followers' -> 1500)"""
+        try:
+            import re
+            if not text or not isinstance(text, str):
+                return 0
+                
+            # Remover texto não numérico
+            num_str = re.sub(r'[^0-9.,]', '', text)
+            
+            # Converter K, M, B para valores numéricos
+            if 'K' in text or 'k' in text:
+                multiplier = 1000
+            elif 'M' in text or 'm' in text:
+                multiplier = 1000000
+            elif 'B' in text or 'b' in text:
+                multiplier = 1000000000
+            else:
+                multiplier = 1
+                
+            # Converter para float e depois para int
+            try:
+                # Substituir vírgula por ponto para conversão correta
+                num_str = num_str.replace(',', '.')
+                return int(float(num_str) * multiplier)
+            except ValueError:
+                return 0
+        except Exception:
+            return 0
+            
     async def _enrich_by_domain_crawlai_firecrawl(self, company_data: Dict[str, Any]) -> Dict[str, Any]:
         """Enriquecimento por domínio usando CrawlAI e Firecrawl"""
         try:
@@ -2013,18 +2152,18 @@ class CompanyEnrichmentService:
         return None
 
     async def _find_linkedin_on_website_firecrawl(self, url: str) -> Optional[str]:
-        """Usa o Firecrawl para encontrar um link do LinkedIn em um site, com fallback para LLM."""
+        """Usa o Firecrawl para encontrar um link do LinkedIn em um site, com extração estruturada."""
         try:
             # Schema para extrair apenas a URL do LinkedIn
             linkedin_schema = {
                 "type": "object",
                 "properties": {
-                    "linkedin_url": {"type": "string", "description": "URL do perfil da empresa no LinkedIn"}
+                    "linkedin_url": {"type": "string", "description": "URL do perfil da empresa no LinkedIn, geralmente encontrada em links de redes sociais ou no rodapé do site"}
                 },
                 "required": ["linkedin_url"]
             }
             
-            # Chamar o _scrape_with_firecrawl com o schema
+            # Chamar o _scrape_with_firecrawl com o schema para usar extract_structured_data
             scraped_data = await self._scrape_with_firecrawl(url, linkedin_schema)
 
             if scraped_data and "linkedin_url" in scraped_data:
@@ -2043,15 +2182,93 @@ class CompanyEnrichmentService:
                 if not website_url.startswith(('http://', 'https://')):
                     website_url = f'https://{website_url}'
                 
-                website_data = await self._scrape_company_website(website_url)
-                if website_data:
+                # Enriquecer com o novo método que usa extract_structured_data
+                enriched_data = await self._enrich_company_with_website({
+                    "website": website_url,
+                    "name": result.get("name") or company_data.get("name"),
+                    "domain": company_data.get("domain")
+                })
+                
+                if enriched_data:
                     # Mesclar dados do website com dados existentes
-                    result = self._merge_website_data(result, website_data)
+                    result = self._merge_website_data(result, enriched_data)
+                else:
+                    # Fallback para o método antigo
+                    website_data = await self._scrape_company_website(website_url)
+                    if website_data:
+                        result = self._merge_website_data(result, website_data)
             
             return result
         except Exception as e:
             self.log_service.log_debug("Website enrichment failed", {"error": str(e)})
             return result
+            
+    async def _enrich_company_with_website(self, company: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Enriquece dados da empresa usando o site da empresa com extração estruturada"""
+        if not company.get("website"):
+            return company
+        
+        website = company["website"]
+        
+        # Schema completo para extração de dados da empresa
+        company_schema = {
+            "type": "object",
+            "properties": {
+                "linkedin_url": {"type": "string", "description": "URL do perfil da empresa no LinkedIn"},
+                "instagram_url": {"type": "string", "description": "URL do perfil da empresa no Instagram"},
+                "twitter_url": {"type": "string", "description": "URL do perfil da empresa no Twitter/X"},
+                "facebook_url": {"type": "string", "description": "URL do perfil da empresa no Facebook"},
+                "company_name": {"type": "string", "description": "Nome oficial da empresa"},
+                "description": {"type": "string", "description": "Descrição ou sobre a empresa"},
+                "industry": {"type": "string", "description": "Indústria ou setor da empresa"},
+                "founded_year": {"type": "string", "description": "Ano de fundação da empresa"},
+                "employee_count": {"type": "string", "description": "Número aproximado de funcionários"},
+                "headquarters": {"type": "string", "description": "Localização da sede da empresa"},
+                "phone": {"type": "string", "description": "Número de telefone principal"},
+                "email": {"type": "string", "description": "Email de contato principal"}
+            }
+        }
+        
+        # Extrair dados estruturados do site
+        self.log_service.log_debug("Extracting structured data from website", {"website": website})
+        structured_data = await self._scrape_with_firecrawl(website, company_schema, user_id)
+        
+        if structured_data and not structured_data.get("error"):
+            # Mapear campos extraídos para o formato da empresa
+            if structured_data.get("linkedin_url"):
+                company["linkedin"] = structured_data["linkedin_url"]
+            if structured_data.get("instagram_url"):
+                company["instagram"] = structured_data["instagram_url"]
+            if structured_data.get("twitter_url"):
+                company["twitter"] = structured_data["twitter_url"]
+            if structured_data.get("facebook_url"):
+                company["facebook"] = structured_data["facebook_url"]
+            if structured_data.get("company_name") and not company.get("name"):
+                company["name"] = structured_data["company_name"]
+            if structured_data.get("description") and not company.get("description"):
+                company["description"] = structured_data["description"]
+            if structured_data.get("industry") and not company.get("industry"):
+                company["industry"] = structured_data["industry"]
+            if structured_data.get("founded_year") and not company.get("founded"):
+                company["founded"] = structured_data["founded_year"]
+            if structured_data.get("employee_count") and not company.get("size"):
+                company["size"] = structured_data["employee_count"]
+            if structured_data.get("headquarters") and not company.get("headquarters"):
+                company["headquarters"] = structured_data["headquarters"]
+            if structured_data.get("phone") and not company.get("phone"):
+                company["phone"] = structured_data["phone"]
+            if structured_data.get("email") and not company.get("email"):
+                company["email"] = structured_data["email"]
+        
+        # Se encontrou LinkedIn, tentar enriquecer com ele
+        if company.get("linkedin") and not company.get("linkedin_enriched"):
+            self.log_service.log_debug("Enriching with LinkedIn", {"linkedin": company["linkedin"]})
+            enriched_data = await self._enrich_company_with_linkedin(company, user_id)
+            if enriched_data:
+                company.update(enriched_data)
+                company["linkedin_enriched"] = True
+                
+        return company
 
     def _parse_linkedin_markdown(self, markdown_content: str) -> Dict[str, Any]:
         """Analisa o conteúdo markdown de uma página de empresa do LinkedIn."""
@@ -2084,21 +2301,35 @@ class CompanyEnrichmentService:
             self.log_service.log_debug("Markdown parsing failed", {"error": str(e)})
             return {}
 
-    async def _scrape_with_firecrawl(self, url: str, schema: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
+    async def _scrape_with_firecrawl(self, url: str, schema: Dict[str, Any] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Fallback para scraping com Firecrawl e extração com LLM"""
         if not self.firecrawl_api_key:
             self.log_service.log_debug("Firecrawl API key not configured.", {})
             return {"error": "Firecrawl not configured"}
 
         try:
+            from api.firecrawl_client import FirecrawlApp
             app = FirecrawlApp(api_key=self.firecrawl_api_key)
             
             self.log_service.log_debug("Starting Firecrawl scraping with enhanced config", {"url": url})
             
+            # Se um schema foi fornecido, usar extract_structured_data
+            if schema:
+                self.log_service.log_debug("Using structured data extraction with schema", {"url": url})
+                return app.extract_structured_data(url, schema)
+            
+            # Caso contrário, usar scrape_url normal
             # Configurar parâmetros para garantir captura de HTML e markdown
             scraped_data = app.scrape_url(
                 url,
-                formats=['markdown', 'html']
+                params={
+                    'formats': ['markdown', 'html'],
+                    'includeTags': ['a', 'script', 'meta', 'link', 'div', 'span', 'footer', 'header', 'nav'],
+                    'onlyMainContent': False,
+                    'waitFor': 3000,
+                    'screenshot': False,
+                    'fullPageScreenshot': False
+                }
             )
             
             # Acessar markdown e HTML corretamente do objeto ScrapeResponse
@@ -2517,6 +2748,131 @@ class CompanyEnrichmentService:
 
 
 
+    async def _enrich_by_name_region_country(self, company_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Enriquecimento por nome, região e país"""
+        try:
+            name = company_data.get("name")
+            region = company_data.get("region")
+            country = company_data.get("country")
+            
+            if not name:
+                return {}
+                
+            self.log_service.log_debug("Starting enrichment by name, region, country", {
+                "name": name,
+                "region": region,
+                "country": country
+            })
+            
+            # Buscar LinkedIn URL usando Brave Search
+            linkedin_url = await self._find_linkedin_by_name_region_country(name, region, country)
+            
+            if not linkedin_url:
+                self.log_service.log_debug("No LinkedIn URL found for company", {"name": name})
+                return {}
+                
+            # Enriquecer com dados do LinkedIn
+            async with CrawlAIService(self.log_service) as crawl_service:
+                linkedin_data = await crawl_service.scrape_linkedin_company_advanced(linkedin_url)
+                
+                if linkedin_data and not linkedin_data.get("error"):
+                    # Normalizar dados do LinkedIn
+                    normalized_data = crawl_service._normalize_linkedin_data(linkedin_data)
+                    normalized_data["_source"] = "crawl4ai_linkedin_by_name"
+                    normalized_data["linkedin_url"] = linkedin_url
+                    return normalized_data
+            
+            return {}
+            
+        except Exception as e:
+            self.log_service.log_debug("Name/Region/Country enrichment error", {
+                "name": company_data.get("name"),
+                "error": str(e)
+            })
+            return {}
+            
+    async def _find_linkedin_by_name_region_country(self, name: str, region: Optional[str] = None, country: Optional[str] = None) -> Optional[str]:
+        """Encontra URL do LinkedIn usando nome, região e país"""
+        try:
+            # Aguardar rate limiting se necessário
+            can_proceed = await self.rate_limiter.wait_if_needed()
+            if not can_proceed:
+                self.log_service.log_debug("Rate limit exceeded for Brave Search", {})
+                return None
+                
+            # Estratégias de busca otimizadas
+            search_strategies = [
+                f'"{name}" official linkedin company profile',
+                f'site:linkedin.com/company "{name}"'
+            ]
+
+            if region:
+                search_strategies.append(f'site:linkedin.com/company "{name}" "{region}"')
+            if country:
+                search_strategies.append(f'site:linkedin.com/company "{name}" "{country}"')
+                
+            for strategy in search_strategies:
+                try:
+                    linkedin_url = await self._search_linkedin_url_with_brave(strategy, region, country)
+                    if linkedin_url:
+                        return linkedin_url
+                except Exception as e:
+                    self.log_service.log_debug(f"Search strategy failed: {strategy}", {"error": str(e)})
+                    continue
+                    
+            return None
+            
+        except Exception as e:
+            self.log_service.log_debug("Error finding LinkedIn URL", {"error": str(e)})
+            return None
+            
+    async def _search_linkedin_url_with_brave(self, search_query: str, region: Optional[str] = None, country: Optional[str] = None) -> Optional[str]:
+        """Busca URL do LinkedIn usando Brave Search"""
+        try:
+            self.log_service.log_debug("Searching LinkedIn URL with Brave", {"query": search_query})
+            
+            # Parâmetros da API Brave Search
+            params = {
+                'q': search_query,
+                'count': 10
+            }
+            
+            # Adicionar país se fornecido (formato correto: código de 2 letras)
+            if country:
+                country_code = self._get_country_code(country)
+                if country_code:
+                    params['country'] = country_code
+                    
+            response = requests.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                headers={
+                    'x-subscription-token': self.brave_api_key,
+                    'Accept': 'application/json',
+                    'Accept-Encoding': 'gzip',
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                },
+                params=params,
+                timeout=15
+            )
+            
+            if response.status_code != 200:
+                self.log_service.log_debug("Brave Search API error", {"status": response.status_code})
+                return None
+                
+            data = response.json()
+            
+            # Extrair URLs do LinkedIn dos resultados
+            for result in data.get('web', {}).get('results', []):
+                url = result.get('url', '')
+                if 'linkedin.com/company/' in url:
+                    return url
+                    
+            return None
+            
+        except Exception as e:
+            self.log_service.log_debug("Error searching LinkedIn URL with Brave", {"error": str(e)})
+            return None
+            
     async def _search_company_with_brave(self, search_term: str, region: Optional[str] = None, country: Optional[str] = None) -> Dict[str, Any]:
         """Busca empresa usando Brave Search com estratégias otimizadas"""
         try:
@@ -3331,12 +3687,22 @@ class CompanyEnrichmentService:
             
             # Usar o novo extrator aprimorado
             async with self.enhanced_social_extractor as extractor:
-                # Tentar extrair o domínio da URL atual
+                # Definir domínio genérico sem especificidade
                 domain = ""
                 try:
-                    # Verificar se estamos processando aae.energy
-                    if "aae.energy" in html_content:
-                        domain = "aae.energy"
+                    # Extrair domínio do conteúdo HTML (sem especificidade de domínios)
+                    soup = BeautifulSoup(html_content, 'html.parser')
+                    # Tentar extrair do canonical link
+                    canonical = soup.find('link', {'rel': 'canonical'})
+                    if canonical and canonical.get('href'):
+                        parsed_url = urlparse(canonical.get('href'))
+                        domain = parsed_url.netloc
+                    # Se não encontrou, tentar extrair do og:url
+                    if not domain:
+                        og_url = soup.find('meta', {'property': 'og:url'}) or soup.find('meta', {'name': 'og:url'})
+                        if og_url and og_url.get('content'):
+                            parsed_url = urlparse(og_url.get('content'))
+                            domain = parsed_url.netloc
                 except Exception as e:
                     self.log_service.log_debug(f"Error extracting domain: {e}", {"error": str(e)})
                 
@@ -3766,6 +4132,42 @@ class CompanyEnrichmentService:
             return None
         except Exception as e:
             self.log_service.log_debug("Error extracting followers count", {"error": str(e)})
+            return None
+            
+    def _convert_to_int(self, value: str) -> Optional[int]:
+        """Converte strings como '1.2k followers' ou '3.5M' para valores inteiros"""
+        if not value or not isinstance(value, str):
+            return None
+            
+        try:
+            # Remover texto não numérico e manter apenas números e símbolos relevantes
+            import re
+            # Extrair o número e o multiplicador (k, m, etc)
+            match = re.search(r'([\d,.]+)\s*([kmb])?', value.lower())
+            if not match:
+                return None
+                
+            # Extrair o número e remover vírgulas e pontos extras
+            num_str = match.group(1).replace(',', '.')
+            # Garantir que há apenas um ponto decimal
+            if num_str.count('.') > 1:
+                parts = num_str.split('.')
+                num_str = parts[0] + '.' + ''.join(parts[1:])
+                
+            num = float(num_str)
+            
+            # Aplicar multiplicador se existir
+            multiplier = match.group(2) if len(match.groups()) > 1 and match.group(2) else ''
+            if multiplier == 'k':
+                num *= 1000
+            elif multiplier == 'm':
+                num *= 1000000
+            elif multiplier == 'b':
+                num *= 1000000000
+                
+            return int(num)
+        except Exception as e:
+            self.log_service.log_debug("Error converting string to int", {"error": str(e), "value": value})
             return None
 
 
@@ -4293,6 +4695,42 @@ class CompanyEnrichmentService:
         except Exception as e:
             self.log_service.log_debug("Error extracting Instagram URL from data", {"error": str(e)})
             return None
+            
+    def _extract_instagram_username_from_url(self, instagram_url: str) -> Optional[str]:
+        """Extrai o nome de usuário do Instagram a partir da URL"""
+        try:
+            if not instagram_url:
+                return None
+                
+            # Limpar a URL
+            cleaned_url = self._clean_social_url(instagram_url)
+            if not cleaned_url:
+                return None
+                
+            # Padrões para extrair username do Instagram
+            patterns = [
+                r'instagram\.com/([a-zA-Z0-9._]+)/?',  # instagram.com/username
+                r'instagram\.com/([a-zA-Z0-9._]+)\?',  # instagram.com/username?param=value
+                r'instagram\.com/p/[^/]+/([a-zA-Z0-9._]+)/?'  # instagram.com/p/postid/username
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, cleaned_url)
+                if match:
+                    username = match.group(1)
+                    # Remover parâmetros e fragmentos
+                    username = username.split('?')[0].split('#')[0]
+                    # Verificar se é um username válido
+                    if username and username not in ['p', 'explore', 'stories', 'reel']:
+                        return username
+            
+            return None
+        except Exception as e:
+            self.log_service.log_debug("Error extracting Instagram username from URL", {
+                "instagram_url": instagram_url,
+                "error": str(e)
+            })
+            return None
     
     async def _scrape_instagram_profile(self, instagram_url: str) -> Optional[Dict[str, Any]]:
         """Faz scraping do perfil do Instagram para extrair dados da bio"""
@@ -4442,6 +4880,7 @@ class PersonEnrichmentService:
         self.log_service = LogService()
         self.brave_token = os.getenv('BRAVE_SEARCH_API_KEY') or os.getenv('BRAVE_API_KEY')
         self.rate_limiter = BraveSearchRateLimiter()
+        self.firecrawl_api_key = os.getenv('FIRECRAWL_API_KEY')
         
         if not self.brave_token:
             raise ValueError("BRAVE_SEARCH_API_KEY não encontrado no arquivo .env")
@@ -4456,6 +4895,7 @@ class PersonEnrichmentService:
             self._enrich_by_linkedin_url,
             self._enrich_by_email,
             self._enrich_by_name_company,
+            self._enrich_by_domain,
             self._enrich_by_phone,
             self._enrich_by_general_search
         ]
@@ -4482,25 +4922,57 @@ class PersonEnrichmentService:
             linkedin_url = data.get("linkedin_url")
             if not linkedin_url:
                 return None
-            
-            async with CrawlAIService(self.log_service) as crawl_service:
-                person_data = await crawl_service.scrape_linkedin_person(linkedin_url)
                 
-                if person_data and not person_data.get("error"):
-                    person_data['linkedin_url'] = linkedin_url
-                    # Formatar resultado
-                    formatted_result = self._format_person_result(person_data, source="crawl4ai_linkedin")
-                    return formatted_result
+            self.log_service.log_debug("Starting LinkedIn URL direct enrichment", {"url": linkedin_url})
             
-            # Fallback para método tradicional se CrawlAI falhar
-            person_data = await self._scrape_linkedin_person(linkedin_url)
-            if person_data:
-                person_data['linkedin_url'] = linkedin_url
-                return self._format_person_result(person_data, source='linkedin_direct')
+            # Verificar se é URL de perfil pessoal ou de empresa
+            is_company_url = "/company/" in linkedin_url.lower()
+            
+            if is_company_url:
+                # Enriquecimento para empresas
+                async with CrawlAIService(self.log_service) as crawl_service:
+                    company_data = await crawl_service.scrape_linkedin_company_advanced(linkedin_url)
+                    
+                    if company_data and not company_data.get("error"):
+                        # Normalizar dados do LinkedIn
+                        normalized_data = crawl_service._normalize_linkedin_data(company_data)
+                        normalized_data["_source"] = "linkedin_direct_url"
+                        normalized_data["linkedin_url"] = linkedin_url
+                        return normalized_data
+                        
+                # Fallback para método tradicional se CrawlAI falhar
+                company_data = await self._scrape_linkedin_company(linkedin_url)
+                if company_data:
+                    company_data['linkedin_url'] = linkedin_url
+                    return company_data
+            else:
+                # Enriquecimento para pessoas
+                async with CrawlAIService(self.log_service) as crawl_service:
+                    person_data = await crawl_service.scrape_linkedin_person(linkedin_url)
+                    
+                    if person_data and not person_data.get("error"):
+                        person_data['linkedin_url'] = linkedin_url
+                        # Formatar resultado
+                        formatted_result = self._format_person_result(person_data, source="crawl4ai_linkedin")
+                        return formatted_result
+                
+                # Fallback para método tradicional se CrawlAI falhar
+                person_data = await self._scrape_linkedin_person(linkedin_url)
+                if person_data:
+                    person_data['linkedin_url'] = linkedin_url
+                    return self._format_person_result(person_data, source='linkedin_direct')
+                    
+                # Segundo fallback usando Firecrawl
+                person_data = await self._scrape_linkedin_person_with_firecrawl(linkedin_url)
+                if person_data:
+                    person_data['linkedin_url'] = linkedin_url
+                    return self._format_person_result(person_data, source='firecrawl_linkedin')
+            
+            self.log_service.log_debug("LinkedIn URL enrichment failed", {"url": linkedin_url})
             return None
             
         except Exception as e:
-            self.log_service.log_debug(f"Error in LinkedIn URL enrichment", {"error": str(e)})
+            self.log_service.log_debug("Error in LinkedIn URL enrichment", {"error": str(e)})
             return None
 
     async def _enrich_by_email(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -4523,8 +4995,119 @@ class PersonEnrichmentService:
         
         return await self._search_and_scrape(search_queries, data)
 
+    async def _find_linkedin_on_website_firecrawl(self, website_url: str) -> Optional[str]:
+        """
+        Usa o Firecrawl para encontrar um link do LinkedIn em um site
+        """
+        try:
+            # Definir schema para extrair apenas a URL do LinkedIn
+            schema = {
+                "linkedin_url": {
+                    "type": "string",
+                    "description": "URL do perfil LinkedIn encontrado no site. Deve ser uma URL completa começando com https://www.linkedin.com/"
+                }
+            }
+            
+            # Chamar o Firecrawl com o schema
+            result = await self._scrape_with_firecrawl(
+                url=website_url,
+                schema=schema,
+                prompt="Encontre a URL do LinkedIn neste site. Retorne apenas a URL completa do LinkedIn."
+            )
+            
+            if result and "linkedin_url" in result and result["linkedin_url"]:
+                linkedin_url = result["linkedin_url"]
+                # Verificar se é uma URL válida do LinkedIn
+                if linkedin_url.startswith("https://www.linkedin.com/"):
+                    return linkedin_url
+            
+            return None
+        except Exception as e:
+            self.log_service.log_debug("Error finding LinkedIn URL with Firecrawl", {"error": str(e)})
+            return None
+            
+    async def _scrape_with_firecrawl(self, url: str, schema: Dict[str, Any] = None, prompt: str = None) -> Dict[str, Any]:
+        """Scraping com Firecrawl e extração com LLM"""
+        if not self.firecrawl_api_key:
+            self.log_service.log_debug("Firecrawl API key not configured.", {})
+            return {"error": "Firecrawl not configured"}
+
+        try:
+            from firecrawl import FirecrawlApp
+            
+            app = FirecrawlApp(api_key=self.firecrawl_api_key)
+            
+            self.log_service.log_debug("Starting Firecrawl scraping", {"url": url})
+            
+            # Se temos um schema, usar para extrair dados estruturados
+            if schema:
+                result = app.extract(url=url, schema=schema, prompt=prompt)
+                return result
+            
+            # Caso contrário, apenas fazer scraping do conteúdo
+            scraped_data = app.scrape_url(url)
+            
+            # Processar resultado
+            if isinstance(scraped_data, list) and len(scraped_data) > 0:
+                return {"content": scraped_data[0]}
+            elif hasattr(scraped_data, 'content'):
+                return {"content": scraped_data.content}
+            elif isinstance(scraped_data, dict):
+                return scraped_data
+            else:
+                return {"content": str(scraped_data)}
+                
+        except Exception as e:
+            self.log_service.log_debug("Error in Firecrawl scraping", {"error": str(e)})
+            return {"error": str(e)}
+    
+    async def _enrich_by_domain(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Estratégia 3: Enriquecimento por domínio para encontrar perfil LinkedIn"""
+        domain = data.get('domain') or data.get('company_domain')
+        email = data.get('email')
+        
+        # Extrair domínio do email se não fornecido diretamente
+        if not domain and email and '@' in email:
+            domain = email.split('@')[1]
+            
+        if not domain:
+            return None
+            
+        self.log_service.log_debug("Starting domain enrichment for person", {"domain": domain})
+        
+        # Normalizar URL
+        if not domain.startswith(("http://", "https://")):
+            website_url = f"https://{domain}"
+        else:
+            website_url = domain
+            
+        # Estratégia 1: Usar Firecrawl para encontrar LinkedIn no site
+        try:
+            linkedin_url = await self._find_linkedin_on_website_firecrawl(website_url)
+            
+            if linkedin_url:
+                self.log_service.log_debug("Found LinkedIn URL via domain", {"linkedin_url": linkedin_url})
+                
+                # Verificar se é URL de perfil pessoal ou de empresa
+                if "/in/" in linkedin_url.lower():
+                    # É um perfil pessoal, usar diretamente
+                    return await self._enrich_by_linkedin_url({"linkedin_url": linkedin_url})
+                else:
+                    # É um perfil de empresa, buscar pessoa pelo nome na empresa
+                    full_name = data.get('full_name')
+                    if full_name:
+                        # Extrair nome da empresa do LinkedIn URL
+                        company_name = linkedin_url.split("/company/")[1].split("/")[0] if "/company/" in linkedin_url else ""
+                        if company_name:
+                            # Buscar pessoa pelo nome + empresa no LinkedIn
+                            return await self._enrich_by_name_company({"full_name": full_name, "company_name": company_name})
+        except Exception as e:
+            self.log_service.log_debug("Error finding LinkedIn via domain", {"error": str(e)})
+        
+        return None
+        
     async def _enrich_by_name_company(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Estratégia 3: Nome + Empresa"""
+        """Estratégia 4: Nome + Empresa"""
         full_name = data.get('full_name')
         company_name = data.get('company_name')
         
@@ -4550,7 +5133,7 @@ class PersonEnrichmentService:
         return await self._search_and_scrape(search_queries, data)
     
     async def _enrich_by_phone(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Estratégia 4: Busca por telefone"""
+        """Estratégia 5: Busca por telefone"""
         phone = data.get('phone')
         if not phone:
             return None
@@ -4565,9 +5148,59 @@ class PersonEnrichmentService:
         ]
         
         return await self._search_and_scrape(search_queries, data)
+        
+    async def _enrich_by_instagram(self, instagram_url: str) -> Dict[str, Any]:
+        """Enriquecimento de empresa usando perfil do Instagram"""
+        try:
+            self.log_service.log_debug("Starting Instagram enrichment", {"instagram_url": instagram_url})
+            
+            # Usar o serviço dedicado de scraping do Instagram
+            scrape_result = await self.instagram_scraper.scrape_profile(instagram_url)
+            
+            # Verificar se houve erro
+            if "error" in scrape_result:
+                self.log_service.log_debug("Instagram scraping failed", {
+                    "instagram_url": instagram_url,
+                    "error": scrape_result["error"]
+                })
+                return {"error": scrape_result["error"]}
+            
+            # Extrair dados do resultado
+            instagram_data = scrape_result["data"]
+            instagram_username = instagram_data.get("username")
+            
+            # Criar estrutura de dados normalizada
+            result = {
+                "name": instagram_data.get("name"),
+                "description": instagram_data.get("bio"),
+                "instagram": {
+                    "url": instagram_url,
+                    "username": instagram_username,
+                    "name": instagram_data.get("name"),
+                    "bio": instagram_data.get("bio"),
+                    "email": instagram_data.get("email"),
+                    "phone": instagram_data.get("phone"),
+                    "followers_count": instagram_data.get("followers_count"),
+                    "following_count": instagram_data.get("following_count"),
+                    "posts_count": instagram_data.get("posts_count")
+                },
+                "website": instagram_data.get("website"),
+                "_source": "instagram",
+                "_confidence_score": 0.8
+            }
+            
+            self.log_service.log_debug("Instagram enrichment successful", {"username": instagram_username})
+            return result
+            
+        except Exception as e:
+            self.log_service.log_debug("Instagram enrichment error", {
+                "instagram_url": instagram_url,
+                "error": str(e)
+            })
+            return {"error": f"Instagram enrichment failed: {str(e)}"}
     
     async def _enrich_by_general_search(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Estratégia 5: Busca geral"""
+        """Estratégia 6: Busca geral"""
         full_name = data.get('full_name')
         if not full_name:
             return None
@@ -4876,6 +5509,76 @@ class PersonEnrichmentService:
             '.pv-top-card--list li:first-child'
         ]
         return self._safe_extract_text(soup, selectors)
+        
+    async def _scrape_linkedin_person_with_firecrawl(self, linkedin_url: str) -> Optional[Dict[str, Any]]:
+        """Faz scraping de dados de pessoa no LinkedIn usando Firecrawl."""
+        self.log_service.log_debug("Starting LinkedIn person scraping with Firecrawl", {"url": linkedin_url})
+        
+        # Schema para extração de dados de pessoa
+        person_schema = {
+            "name": "string",
+            "headline": "string",
+            "location": "string",
+            "current_company": "string",
+            "current_position": "string",
+            "about": "string",
+            "experience": [{
+                "title": "string",
+                "company": "string",
+                "duration": "string",
+                "description": "string"
+            }],
+            "education": [{
+                "institution": "string",
+                "degree": "string",
+                "field": "string",
+                "duration": "string"
+            }],
+            "skills": ["string"],
+            "languages": ["string"],
+            "certifications": [{
+                "name": "string",
+                "issuer": "string",
+                "date": "string"
+            }],
+            "contact_info": {
+                "email": "string",
+                "phone": "string",
+                "website": "string"
+            }
+        }
+        
+        try:
+            # Usar Firecrawl para obter dados da página
+            scraped_data = await self._scrape_with_firecrawl(linkedin_url, person_schema, None)
+            
+            if not scraped_data or scraped_data.get("error"):
+                self.log_service.log_debug("Firecrawl scraping failed", {"url": linkedin_url})
+                return None
+            
+            # Mapear os dados para o formato esperado
+            person_data = {
+                'name': scraped_data.get('name'),
+                'headline': scraped_data.get('headline'),
+                'location': scraped_data.get('location'),
+                'current_company': scraped_data.get('current_company'),
+                'current_title': scraped_data.get('current_position'),
+                'about': scraped_data.get('about'),
+                'skills': scraped_data.get('skills', []),
+                'experience': scraped_data.get('experience', []),
+                'education': scraped_data.get('education', []),
+                'certifications': scraped_data.get('certifications', []),
+                'languages': scraped_data.get('languages', []),
+                'contact_info': scraped_data.get('contact_info', {}),
+                'source': 'firecrawl',
+                'confidence_score': 0.6  # Confiança menor que CrawlAI
+            }
+            
+            return person_data
+            
+        except Exception as e:
+            self.log_service.log_debug("LinkedIn person scraping with Firecrawl failed", {"error": str(e), "url": linkedin_url})
+            return None
     
     def _extract_person_headline(self, soup: BeautifulSoup) -> Optional[str]:
         """Extrai headline/título profissional"""

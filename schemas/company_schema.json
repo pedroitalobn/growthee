@@ -1,0 +1,61 @@
+{
+  "type": "object",
+  "properties": {
+    "company_name": {
+      "type": "string",
+      "description": "Nome oficial da empresa, geralmente encontrado no cabeçalho do site, rodapé ou seção 'Sobre'"
+    },
+    "description": {
+      "type": "string",
+      "description": "Descrição ou resumo da empresa, geralmente encontrado na página inicial ou seção 'Sobre'"
+    },
+    "industry": {
+      "type": "string",
+      "description": "Setor ou indústria em que a empresa atua"
+    },
+    "founded_year": {
+      "type": "string",
+      "description": "Ano em que a empresa foi fundada"
+    },
+    "employee_count": {
+      "type": "string",
+      "description": "Número aproximado de funcionários, pode ser um intervalo como '51-200'"
+    },
+    "headquarters": {
+      "type": "string",
+      "description": "Localização da sede da empresa, cidade e país"
+    },
+    "linkedin_url": {
+      "type": "string",
+      "description": "URL do perfil da empresa no LinkedIn, geralmente encontrado no rodapé ou seção de redes sociais"
+    },
+    "twitter_url": {
+      "type": "string",
+      "description": "URL do perfil da empresa no Twitter/X, geralmente encontrado no rodapé ou seção de redes sociais"
+    },
+    "facebook_url": {
+      "type": "string",
+      "description": "URL do perfil da empresa no Facebook, geralmente encontrado no rodapé ou seção de redes sociais"
+    },
+    "instagram_url": {
+      "type": "string",
+      "description": "URL do perfil da empresa no Instagram, geralmente encontrado no rodapé ou seção de redes sociais"
+    },
+    "contact_email": {
+      "type": "string",
+      "description": "Email de contato da empresa, geralmente encontrado na página de contato ou rodapé"
+    },
+    "contact_phone": {
+      "type": "string",
+      "description": "Número de telefone de contato da empresa, geralmente encontrado na página de contato ou rodapé"
+    },
+    "products_services": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Lista dos principais produtos ou serviços oferecidos pela empresa"
+    }
+  },
+  "required": ["company_name"]
+}

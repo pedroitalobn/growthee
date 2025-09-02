@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "linkedin_url": {
+      "type": "string",
+      "description": "URL do perfil da empresa no LinkedIn, geralmente encontrado no rodapé, seção de redes sociais ou em ícones de compartilhamento. Formatos comuns incluem 'https://www.linkedin.com/company/nome-da-empresa' ou 'https://linkedin.com/in/nome-do-perfil'"
+    }
+  },
+  "required": ["linkedin_url"]
+}

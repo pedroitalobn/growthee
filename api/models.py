@@ -1,21 +1,71 @@
 from pydantic import BaseModel, HttpUrl, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 class CompanyRequest(BaseModel):
     name: Optional[str] = None
     domain: Optional[str] = None
     linkedin_url: Optional[str] = None
+    instagram_url: Optional[str] = None
     region: Optional[str] = None  # ✅ Novo campo para região/estado
     country: Optional[str] = None  # ✅ Novo campo para país
+    
+    # Super enrichment options
+    extract_social_media: Optional[bool] = True
+    extract_linkedin: Optional[bool] = True
+    use_brave_search: Optional[bool] = True
+    deep_extraction: Optional[bool] = False
 
     @property
     def has_valid_input(self) -> bool:
-        return bool(self.name or self.domain or self.linkedin_url)
+        return bool(self.name or self.domain or self.linkedin_url or self.instagram_url)
 
 class SocialMedia(BaseModel):
     platform: str
     url: str
     followers: Optional[int] = None
+
+class InstagramData(BaseModel):
+    url: Optional[str] = None
+    name: Optional[str] = None
+    user: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    bio: Optional[str] = None
+    followers: Optional[int] = None
+    following: Optional[int] = None
+    posts: Optional[int] = None
+
+class LinkedInData(BaseModel):
+    url: Optional[str] = None
+    company_name: Optional[str] = None
+    followers: Optional[int] = None
+    employees_count: Optional[str] = None
+    industry: Optional[str] = None
+    description: Optional[str] = None
+    # Dados de localização
+    country: Optional[str] = None
+    region: Optional[str] = None
+    city: Optional[str] = None
+    postal_code: Optional[str] = None
+    street_address: Optional[str] = None
+
+class WhatsAppData(BaseModel):
+    phone: Optional[str] = None
+    business_name: Optional[str] = None
+    verified: Optional[bool] = None
+
+class TikTokData(BaseModel):
+    url: Optional[str] = None
+    username: Optional[str] = None
+    followers: Optional[int] = None
+    likes: Optional[int] = None
+    bio: Optional[str] = None
+
+class TelegramData(BaseModel):
+    url: Optional[str] = None
+    username: Optional[str] = None
+    members: Optional[int] = None
+    description: Optional[str] = None
 
 class Employee(BaseModel):
     name: str
@@ -30,7 +80,6 @@ class CompanyResponse(BaseModel):
     founded: Optional[str] = None
     headquarters: Optional[str] = None
     website: Optional[str] = None
-    linkedin: Optional[str] = None
     
     # Location fields
     country: Optional[str] = None
@@ -50,8 +99,17 @@ class CompanyResponse(BaseModel):
     certifications: List[dict] = []
     
     employees: List[dict] = []
-    social_media: List[dict] = []
-    error: Optional[str] = None
+    
+    # Enhanced social media data
+    instagram: Optional[InstagramData] = None
+    linkedin: Optional[LinkedInData] = None
+    whatsapp: Optional[WhatsAppData] = None
+    tiktok: Optional[TikTokData] = None
+    telegram: Optional[TelegramData] = None
+    
+    # Status fields
+    enrich: bool = True  # Indica se o enriquecimento foi realizado com sucesso
+    error: Optional[str] = None  # Mensagem de erro, se houver
 
 # Modelos para enriquecimento de pessoas
 class PersonRequest(BaseModel):
@@ -62,12 +120,14 @@ class PersonRequest(BaseModel):
     company_name: Optional[str] = None
     company_linkedin: Optional[str] = None
     company_website: Optional[str] = None
+    domain: Optional[str] = None
+    company_domain: Optional[str] = None
     region: Optional[str] = None
     country: Optional[str] = None
 
     @property
     def has_valid_input(self) -> bool:
-        return bool(self.email or self.linkedin_url or self.phone or self.full_name)
+        return bool(self.email or self.linkedin_url or self.phone or self.full_name or self.domain or self.company_domain)
 
 class PersonExperience(BaseModel):
     company: str
@@ -82,7 +142,7 @@ class PersonEducation(BaseModel):
     field: Optional[str] = None
     duration: Optional[str] = None
 
-class PersonResponse(BaseModel):
+class PersonData(BaseModel):
     full_name: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
@@ -104,7 +164,20 @@ class PersonResponse(BaseModel):
     experience: List[PersonExperience] = []
     education: List[PersonEducation] = []
     social_media: List[dict] = []
+    
+    # Enhanced social media data
+    instagram: Optional[InstagramData] = None
+    linkedin_data: Optional[LinkedInData] = None
+    whatsapp: Optional[WhatsAppData] = None
+    tiktok: Optional[TikTokData] = None
+    telegram: Optional[TelegramData] = None
     confidence_score: Optional[float] = None
     data_source: Optional[str] = None
     last_updated: Optional[str] = None
     error: Optional[str] = None
+
+class PersonResponse(BaseModel):
+    success: bool = True
+    data: Optional[Dict[str, Any]] = None
+    message: str = "Person enriched successfully"
+    enrich: bool = True

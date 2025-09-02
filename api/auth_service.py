@@ -1,4 +1,5 @@
-from playwright.async_api import async_playwright
+# Remover esta linha
+# from playwright.async_api import async_playwright
 import json
 import os
 import time
