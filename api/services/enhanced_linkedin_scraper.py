@@ -22,6 +22,20 @@ class LinkedInExtractionResult:
     website: Optional[str] = None
     specialties: Optional[List[str]] = None
     follower_count: Optional[int] = None
+    
+    # Enhanced location fields
+    country: Optional[str] = None
+    country_code: Optional[str] = None
+    region: Optional[str] = None
+    city: Optional[str] = None
+    postal_code: Optional[str] = None
+    street_address: Optional[str] = None
+    
+    # Enhanced company data
+    company_history: Optional[str] = None
+    employee_count_range: Optional[str] = None
+    employee_count_exact: Optional[int] = None
+    
     confidence_score: float = 0.0
     extraction_methods: List[str] = None
 
@@ -53,21 +67,51 @@ class EnhancedLinkedInScraper:
             'employee_count': [
                 r'([0-9,]+)\s*employees?',
                 r'([0-9,]+)-([0-9,]+)\s*employees?',
-                r'"employeeCountRange"\s*:\s*"([^"]+)"'
+                r'"employeeCountRange"\s*:\s*"([^"]+)"',
+                r'([0-9,]+)\s*(?:to|-)\s*([0-9,]+)\s*employees?',
+                r'Size\s*[:\-]?\s*([0-9,]+(?:\s*[-–]\s*[0-9,]+)?)\s*employees?',
+                r'Company\s*size[:\s]*([0-9,]+(?:\s*[-–]\s*[0-9,]+)?)\s*employees?'
             ],
             'headquarters': [
                 r'Headquarters[^>]*>\s*([^<]+)',
                 r'"headquarters"\s*:\s*"([^"]+)"',
-                r'<dd[^>]*>([^<]*(?:Street|Avenue|Road|Boulevard|Drive)[^<]*)</dd>'
+                r'<dd[^>]*>([^<]*(?:Street|Avenue|Road|Boulevard|Drive)[^<]*)</dd>',
+                r'Location[:\s]*([^\n\r<]+(?:Street|Avenue|Road|Boulevard|Drive|City|State|Country)[^\n\r<]*)',
+                r'Based\s*in[:\s]*([^\n\r<]+)'
             ],
             'founded': [
                 r'Founded[^>]*>\s*([0-9]{4})',
                 r'"founded"\s*:\s*"?([0-9]{4})"?',
-                r'Since\s+([0-9]{4})'
+                r'Since\s+([0-9]{4})',
+                r'Established[:\s]*([0-9]{4})'
             ],
             'follower_count': [
                 r'([0-9,]+)\s*followers?',
                 r'"followerCount"\s*:\s*([0-9,]+)'
+            ],
+            # Enhanced location patterns
+            'country': [
+                r'Country[:\s]*([A-Za-z\s]+)',
+                r'"addressCountry"\s*:\s*"([^"]+)"',
+                r'([A-Za-z\s]+)(?:\s*,\s*[A-Z]{2,3})?$',  # Country at end of address
+                r'Location[^>]*>\s*[^,]*,\s*[^,]*,\s*([A-Za-z\s]+)'
+            ],
+            'region': [
+                r'State[:\s]*([A-Za-z\s]+)',
+                r'Region[:\s]*([A-Za-z\s]+)',
+                r'"addressRegion"\s*:\s*"([^"]+)"',
+                r'([A-Za-z\s]+)\s*,\s*[A-Za-z\s]+$'  # State/Region before country
+            ],
+            'city': [
+                r'City[:\s]*([A-Za-z\s]+)',
+                r'"addressLocality"\s*:\s*"([^"]+)"',
+                r'^([A-Za-z\s]+)\s*,'  # City at beginning of address
+            ],
+            'company_history': [
+                r'About\s*us[^>]*>([^<]{100,})',
+                r'Company\s*history[^>]*>([^<]{100,})',
+                r'Our\s*story[^>]*>([^<]{100,})',
+                r'"about"\s*:\s*"([^"]{100,})"'
             ]
         }
         
@@ -98,6 +142,10 @@ class EnhancedLinkedInScraper:
             ],
             'employee_count': [
                 '[data-test-id="org-employees-count"]',
+                '.org-top-card-summary__employee-count',
+                '.org-page-details__definition-text:contains("employees")',
+                '.company-size',
+                '[data-test-id="company-size"]',
                 '.org-about-company-module__company-staff-count-range',
                 '.org-top-card-summary__employee-count',
                 '.employee-count'
@@ -122,6 +170,30 @@ class EnhancedLinkedInScraper:
                 '[data-test-id="org-specialties"]',
                 '.org-about-company-module__specialties',
                 '.specialties-list'
+            ],
+            'location': [
+                '[data-test-id="org-location"]',
+                '.org-top-card-summary__location',
+                '.org-about-company-module__location',
+                '.company-location',
+                '.location-info'
+            ],
+            'country': [
+                '.org-location-country',
+                '.company-country',
+                '[data-test-id="company-country"]'
+            ],
+            'city': [
+                '.org-location-city',
+                '.company-city',
+                '[data-test-id="company-city"]'
+            ],
+            'company_history': [
+                '.org-about-us-organization-description__text',
+                '.org-about-company-module__description',
+                '.company-description',
+                '.about-us-description',
+                '[data-test-id="company-description"]'
             ]
         }
     
@@ -549,9 +621,34 @@ class EnhancedLinkedInScraper:
         result.founded = consolidated_data.get('founded')
         result.website = consolidated_data.get('website')
         
+        # Novos campos de localização
+        result.country = consolidated_data.get('country')
+        result.city = consolidated_data.get('city')
+        result.region = consolidated_data.get('region')
+        result.postal_code = consolidated_data.get('postal_code')
+        result.street_address = consolidated_data.get('street_address')
+        
+        # Histórico da empresa
+        result.company_history = consolidated_data.get('company_history')
+        result.employee_count_range = consolidated_data.get('employee_count_range')
+        
+        # Processar localização a partir do headquarters se disponível
+        if result.headquarters and not result.country:
+            location_parts = result.headquarters.split(',')
+            if len(location_parts) >= 2:
+                result.city = location_parts[0].strip()
+                result.country = location_parts[-1].strip()
+                if len(location_parts) >= 3:
+                    result.region = location_parts[1].strip()
+        
+        # Gerar código do país se temos o nome do país
+        if result.country and not result.country_code:
+            result.country_code = self._get_country_code(result.country)
+        
         # Processar employee_count
         if 'employee_count' in consolidated_data:
             result.employee_count = self._parse_employee_count(consolidated_data['employee_count'])
+            result.employee_count_exact = result.employee_count
         
         # Processar specialties
         if 'specialties' in consolidated_data:
@@ -631,11 +728,65 @@ class EnhancedLinkedInScraper:
     def _parse_number(self, value: str) -> Optional[int]:
         """Extrai número de uma string"""
         try:
-            # Remover tudo exceto dígitos
-            numbers = re.sub(r'[^0-9]', '', value)
-            return int(numbers) if numbers else None
-        except ValueError:
+            # Remove caracteres não numéricos exceto vírgulas e pontos
+            clean_value = re.sub(r'[^0-9,.]', '', value)
+            # Remove vírgulas (separadores de milhares)
+            clean_value = clean_value.replace(',', '')
+            return int(float(clean_value))
+        except (ValueError, TypeError):
             return None
+    
+    def _get_country_code(self, country_name: str) -> Optional[str]:
+        """Converte nome do país para código ISO"""
+        if not country_name:
+            return None
+            
+        country_mapping = {
+            'United States': 'US', 'USA': 'US', 'America': 'US',
+            'United Kingdom': 'GB', 'UK': 'GB', 'England': 'GB',
+            'Brazil': 'BR', 'Brasil': 'BR',
+            'Canada': 'CA',
+            'Germany': 'DE', 'Deutschland': 'DE',
+            'France': 'FR',
+            'Italy': 'IT', 'Italia': 'IT',
+            'Spain': 'ES', 'España': 'ES',
+            'Netherlands': 'NL', 'Holland': 'NL',
+            'Australia': 'AU',
+            'Japan': 'JP',
+            'China': 'CN',
+            'India': 'IN',
+            'Mexico': 'MX', 'México': 'MX',
+            'Argentina': 'AR',
+            'Chile': 'CL',
+            'Colombia': 'CO',
+            'Peru': 'PE', 'Perú': 'PE',
+            'Portugal': 'PT',
+            'Russia': 'RU',
+            'South Korea': 'KR', 'Korea': 'KR',
+            'Singapore': 'SG',
+            'Switzerland': 'CH',
+            'Sweden': 'SE',
+            'Norway': 'NO',
+            'Denmark': 'DK',
+            'Finland': 'FI',
+            'Belgium': 'BE',
+            'Austria': 'AT',
+            'Ireland': 'IE',
+            'Poland': 'PL',
+            'Czech Republic': 'CZ',
+            'Hungary': 'HU',
+            'Romania': 'RO',
+            'Bulgaria': 'BG',
+            'Croatia': 'HR',
+            'Slovenia': 'SI',
+            'Slovakia': 'SK',
+            'Lithuania': 'LT',
+            'Latvia': 'LV',
+            'Estonia': 'EE'
+        }
+        
+        country_clean = country_name.strip().title()
+        return country_mapping.get(country_clean)
     
     def _clean_extracted_text(self, text: str) -> str:
         """Limpa texto extraído removendo caracteres desnecessários"""

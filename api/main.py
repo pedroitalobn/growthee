@@ -117,16 +117,36 @@ async def enrich_company(request: CompanyRequest):
                     linkedin_enhanced_result = await enhanced_linkedin_scraper.scrape_linkedin_data(
                         linkedin_url_from_search, request.domain
                     )
-                    if linkedin_enhanced_result and linkedin_enhanced_result.get('confidence_score', 0) > 0.5:
-                        # Convert to expected format and return early
+                    if linkedin_enhanced_result and linkedin_enhanced_result.confidence_score > 0.5:
+                        # Convert to expected format and return early with enhanced data
                         response_data = {
-                            "company_name": linkedin_enhanced_result.get('company_name'),
-                            "description": linkedin_enhanced_result.get('description'),
-                            "industry": linkedin_enhanced_result.get('industry'),
-                            "employee_count": linkedin_enhanced_result.get('employee_count'),
-                            "headquarters": linkedin_enhanced_result.get('headquarters'),
-                            "website": linkedin_enhanced_result.get('website'),
-                            "linkedin_data": linkedin_enhanced_result,
+                            "company_name": linkedin_enhanced_result.company_name,
+                            "description": linkedin_enhanced_result.description,
+                            "industry": linkedin_enhanced_result.industry,
+                            "employee_count": linkedin_enhanced_result.employee_count,
+                            "headquarters": linkedin_enhanced_result.headquarters,
+                            "website": linkedin_enhanced_result.website,
+                            "founded": linkedin_enhanced_result.founded,
+                            "company_size": linkedin_enhanced_result.company_size,
+                            "specialties": linkedin_enhanced_result.specialties,
+                            "follower_count": linkedin_enhanced_result.follower_count,
+                            # Enhanced location data
+                            "country": linkedin_enhanced_result.country,
+                            "country_code": linkedin_enhanced_result.country_code,
+                            "region": linkedin_enhanced_result.region,
+                            "city": linkedin_enhanced_result.city,
+                            "postal_code": linkedin_enhanced_result.postal_code,
+                            "street_address": linkedin_enhanced_result.street_address,
+                            # Company history and additional data
+                            "company_history": linkedin_enhanced_result.company_history,
+                            "employee_count_range": linkedin_enhanced_result.employee_count_range,
+                            "employee_count_exact": linkedin_enhanced_result.employee_count_exact,
+                            # Metadata
+                            "linkedin_data": {
+                                "confidence_score": linkedin_enhanced_result.confidence_score,
+                                "extraction_methods": linkedin_enhanced_result.extraction_methods,
+                                "linkedin_url": linkedin_url_from_search
+                            },
                             "social_media_data": social_media_data,
                             "brave_search_data": brave_search_data,
                             "enrichment_source": "enhanced_linkedin_scraper",

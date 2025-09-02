@@ -73,24 +73,38 @@ class Employee(BaseModel):
     linkedin_url: Optional[str] = None
 
 class CompanyResponse(BaseModel):
+    # Core company information
     name: Optional[str] = None
+    company_name: Optional[str] = None  # Alias for name
     description: Optional[str] = None
     industry: Optional[str] = None
     size: Optional[str] = None
+    company_size: Optional[str] = None  # Enhanced size info
     founded: Optional[str] = None
     headquarters: Optional[str] = None
     website: Optional[str] = None
     
-    # Location fields
+    # Employee information
+    employee_count: Optional[str] = None
+    employee_count_exact: Optional[int] = None
+    employee_count_range: Optional[str] = None
+    follower_count: Optional[int] = None
+    
+    # Location fields (enhanced)
     country: Optional[str] = None
     country_code: Optional[str] = None
     region: Optional[str] = None
     region_code: Optional[str] = None
     city: Optional[str] = None
+    postal_code: Optional[str] = None
+    street_address: Optional[str] = None
     country_dial_code: Optional[str] = None
     
-    # Enhanced fields from website scraping
+    # Company details
     company_history: Optional[str] = None
+    specialties: Optional[List[str]] = None
+    
+    # Enhanced fields from website scraping
     recent_news: List[dict] = []
     contact_info: dict = {}
     team_info: dict = {}

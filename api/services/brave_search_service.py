@@ -14,7 +14,10 @@ class BraveSearchService:
         self.api_key = os.getenv('BRAVE_SEARCH_API_KEY')
         self.base_url = "https://api.search.brave.com/res/v1/web/search"
         
-        if not self.api_key:
+        # Debug da chave da API
+        if self.api_key:
+            self.log_service.log_debug(f"Brave Search API Key carregada: {self.api_key[:10]}...")
+        else:
             self.log_service.log_error("BRAVE_SEARCH_API_KEY não encontrada. Busca externa desabilitada.")
     
     async def search_company_linkedin(self, domain: str, company_name: str = None) -> Optional[str]:
@@ -225,6 +228,89 @@ class BraveSearchService:
         
         return False
     
+    async def search_company_by_name_location(self, company_name: str, region: str = None, country: str = None) -> Dict[str, Any]:
+        """Busca informações da empresa apenas por nome e localização"""
+        if not self.api_key:
+            return {}
+            
+        try:
+            # Construir queries baseadas em nome e localização
+            queries = []
+            
+            # Query básica com nome da empresa
+            base_query = f'"{company_name}" empresa'
+            
+            # Adicionar localização se fornecida
+            if region and country:
+                queries.extend([
+                    f'"{company_name}" empresa {region} {country}',
+                    f'"{company_name}" {region} {country} linkedin',
+                    f'"{company_name}" {region} {country} site:linkedin.com/company',
+                    f'"{company_name}" {region} {country} contato'
+                ])
+            elif country:
+                queries.extend([
+                    f'"{company_name}" empresa {country}',
+                    f'"{company_name}" {country} linkedin',
+                    f'"{company_name}" {country} site:linkedin.com/company'
+                ])
+            elif region:
+                queries.extend([
+                    f'"{company_name}" empresa {region}',
+                    f'"{company_name}" {region} linkedin'
+                ])
+            else:
+                queries.append(base_query)
+            
+            # Adicionar queries específicas para LinkedIn
+            queries.extend([
+                f'site:linkedin.com/company "{company_name}"',
+                f'"{company_name}" linkedin empresa'
+            ])
+            
+            company_info = {
+                'company_name': company_name,
+                'region': region,
+                'country': country,
+                'linkedin_url': None,
+                'descriptions': [],
+                'contact_info': {},
+                'addresses': [],
+                'social_media': {},
+                'website': None,
+                'additional_info': []
+            }
+            
+            for query in queries:
+                results = await self._search_company_details(query)
+                if results:
+                    for result in results:
+                        # Verificar se é LinkedIn
+                        if 'linkedin.com/company' in result.get('url', ''):
+                            if not company_info['linkedin_url']:
+                                company_info['linkedin_url'] = result['url']
+                        
+                        # Categorizar resultados
+                        if 'linkedin' in query.lower():
+                            if 'linkedin_url' not in company_info or not company_info['linkedin_url']:
+                                company_info['linkedin_url'] = result.get('url')
+                        elif 'contato' in query.lower():
+                            if 'results' not in company_info['contact_info']:
+                                company_info['contact_info']['results'] = []
+                            company_info['contact_info']['results'].append(result)
+                        elif 'endereço' in query.lower() or 'localização' in query.lower():
+                            company_info['addresses'].append(result)
+                        else:
+                            company_info['descriptions'].append(result)
+                            
+                await asyncio.sleep(0.5)
+            
+            return company_info
+            
+        except Exception as e:
+            self.log_service.log_error(f"Erro na busca da empresa por nome e localização: {str(e)}")
+            return {}
+
     async def search_company_info(self, domain: str, company_name: str = None) -> Dict[str, Any]:
         """Busca informações gerais da empresa"""
         if not self.api_key:
@@ -243,7 +329,7 @@ class BraveSearchService:
             
             company_info = {
                 'descriptions': [],
-                'contact_info': [],
+                'contact_info': {},
                 'addresses': [],
                 'additional_info': []
             }
@@ -254,7 +340,9 @@ class BraveSearchService:
                     if 'sobre' in query or 'empresa' in query:
                         company_info['descriptions'].extend(results)
                     elif 'contato' in query or 'telefone' in query:
-                        company_info['contact_info'].extend(results)
+                        if 'results' not in company_info['contact_info']:
+                            company_info['contact_info']['results'] = []
+                        company_info['contact_info']['results'].extend(results)
                     elif 'endereço' in query or 'localização' in query:
                         company_info['addresses'].extend(results)
                     else:
