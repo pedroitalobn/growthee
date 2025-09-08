@@ -1,4 +1,4 @@
-# Recomendações de Tecnologias - EnrichStory
+# Recomendações de Tecnologias - Growthee
 
 ## Tecnologias Prioritárias para Implementação
 

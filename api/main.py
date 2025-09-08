@@ -31,7 +31,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="EnrichStory API", version="2.0.0")
+app = FastAPI(title="Growthee API", version="2.0.0")
 
 # CORS middleware
 app.add_middleware(
@@ -72,7 +72,7 @@ async def health_check():
 
 @app.get("/")
 async def root():
-    return {"message": "EnrichStory API v2.0.0"}
+    return {"message": "Growthee API v2.0.0"}
 
 @app.get("/debug/db")
 async def debug_db(db: Prisma = Depends(get_db)):

@@ -24,7 +24,7 @@
     "next": "Próximo",
     "previous": "Anterior",
     "confirm": "Confirmar",
-    "appName": "EnrichStory"
+    "appName": "Growthee"
   },
   "navigation": {
     "dashboard": "Dashboard",
@@ -37,7 +37,7 @@
     "documentation": "Documentação",
     "analytics": "Análises",
     "logout": "Sair",
-    "appName": "EnrichStory",
+    "appName": "Growthee",
     "playground": "Playground",
     "admin": "Admin"
   },
@@ -48,15 +48,15 @@
     },
     "login": {
       "title": "Login",
-      "description": "Acesse sua conta EnrichStory"
+      "description": "Acesse sua conta Growthee"
     },
     "signup": {
       "title": "Cadastro",
-      "description": "Crie sua conta EnrichStory"
+      "description": "Crie sua conta Growthee"
     },
     "admin": {
       "title": "Administração",
-      "description": "Painel administrativo do EnrichStory"
+      "description": "Painel administrativo do Growthee"
     },
     "billing": {
       "title": "Faturamento",
@@ -265,7 +265,7 @@
     "mostPopular": "Mais Popular",
     "current": "Atual",
     "choosePlan": "Escolha seu Plano",
-    "unlockPotential": "Desbloqueie todo o potencial do EnrichStory",
+    "unlockPotential": "Desbloqueie todo o potencial do Growthee",
     "availablePlans": "Planos Disponíveis",
     "credits": "créditos",
     "selectPlan": "Selecionar Plano",

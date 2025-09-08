@@ -68,8 +68,8 @@ export async function generatePageMetadata(
 export function generateStaticMetadata(): Metadata {
   return {
     title: {
-      default: 'EnrichStory - API de Enriquecimento de Dados',
-      template: '%s | EnrichStory'
+      default: 'Growthee - API de Enriquecimento de Dados',
+    template: '%s | Growthee'
     },
     description: 'Plataforma completa para enriquecimento de dados empresariais com APIs poderosas e interface intuitiva.',
     keywords: [
@@ -80,9 +80,9 @@ export function generateStaticMetadata(): Metadata {
       'integração',
       'business intelligence'
     ],
-    authors: [{ name: 'EnrichStory Team' }],
-    creator: 'EnrichStory',
-    publisher: 'EnrichStory',
+    authors: [{ name: 'Growthee Team' }],
+  creator: 'Growthee',
+  publisher: 'Growthee',
     formatDetection: {
       email: false,
       address: false,

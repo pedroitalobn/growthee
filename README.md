@@ -1,4 +1,4 @@
-# EnrichStory SaaS
+# Growthee SaaS
 
 Plataforma SaaS para enriquecimento de dados de empresas e pessoas usando LinkedIn e Brave Search.
 
@@ -35,8 +35,8 @@ Plataforma SaaS para enriquecimento de dados de empresas e pessoas usando Linked
 ### Desenvolvimento Local
 ```bash
 # Clone o repositório
-git clone https://github.com/pedroitalobn/enrichstory.git
-cd enrichstory
+git clone https://github.com/pedroitalobn/growthee.git
+cd growthee
 
 # Configure as variáveis de ambiente
 cp .env.example .env
@@ -49,10 +49,10 @@ docker-compose up -d
 ### Produção
 ```bash
 # Backend
-docker pull pedroitalobn/enrichstory-backend:latest
+docker pull pedroitalobn/growthee-backend:latest
 
 # Frontend
-docker pull pedroitalobn/enrichstory-frontend:latest
+docker pull pedroitalobn/growthee-frontend:latest
 
 # Execute o docker-compose.prod.yml
 docker-compose -f docker-compose.prod.yml up -d
@@ -62,7 +62,7 @@ docker-compose -f docker-compose.prod.yml up -d
 
 ### Variáveis de Ambiente Obrigatórias
 ```env
-DATABASE_URL=postgresql://user:password@localhost:5432/enrichstory
+DATABASE_URL=postgresql://user:password@localhost:5432/growthee
 REDIS_URL=redis://localhost:6379
 JWT_SECRET=sua_chave_super_secreta
 STRIPE_SECRET_KEY=sk_...

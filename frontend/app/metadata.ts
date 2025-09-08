@@ -2,8 +2,8 @@ import { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: {
-    default: 'EnrichStory - API de Enriquecimento de Dados',
-    template: '%s | EnrichStory'
+    default: 'Growthee - API de Enriquecimento de Dados',
+  template: '%s | Growthee'
   },
   description: 'Plataforma completa para enriquecimento de dados empresariais com APIs poderosas e interface intuitiva.',
   keywords: [
@@ -14,9 +14,9 @@ export const metadata: Metadata = {
     'integração',
     'business intelligence'
   ],
-  authors: [{ name: 'EnrichStory Team' }],
-  creator: 'EnrichStory',
-  publisher: 'EnrichStory',
+  authors: [{ name: 'Growthee Team' }],
+creator: 'Growthee',
+publisher: 'Growthee',
   formatDetection: {
     email: false,
     address: false,
@@ -30,15 +30,15 @@ export const metadata: Metadata = {
     type: 'website',
     locale: 'pt_BR',
     url: '/',
-    title: 'EnrichStory - API de Enriquecimento de Dados',
+    title: 'Growthee - API de Enriquecimento de Dados',
     description: 'Plataforma completa para enriquecimento de dados empresariais com APIs poderosas e interface intuitiva.',
-    siteName: 'EnrichStory',
+    siteName: 'Growthee',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'EnrichStory - API de Enriquecimento de Dados',
+    title: 'Growthee - API de Enriquecimento de Dados',
     description: 'Plataforma completa para enriquecimento de dados empresariais com APIs poderosas e interface intuitiva.',
-    creator: '@enrichstory',
+    creator: '@growthee',
   },
   robots: {
     index: true,
