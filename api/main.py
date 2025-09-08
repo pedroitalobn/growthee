@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from .models import CompanyRequest, CompanyResponse, PersonRequest, PersonResponse
 from .enrichment_services import CompanyEnrichmentService, PersonEnrichmentService
@@ -10,7 +10,15 @@ from .services.brave_search_service import BraveSearchService
 
 from .auth_routes import router as auth_router
 from .scrapp_routes import router as scrapp_router
+from .routes.api_keys import router as api_keys_router
+from api.routes.dashboard import router as dashboard_router
+from api.routes.profile import router as profile_router
+from api.routes.credits import router as credits_router
+from api.routes.docs import router as docs_router
+from api.routes.auth_credits import router as auth_credits_router
+from .middleware import require_credits, credit_middleware
 from prisma import Prisma
+from .database import set_prisma_instance, get_db
 import logging
 import os
 import re
@@ -50,6 +58,7 @@ person_enrichment_service = PersonEnrichmentService()
 @app.on_event("startup")
 async def startup():
     await prisma.connect()
+    set_prisma_instance(prisma)
     logger.info("Prisma connected successfully")
 
 @app.on_event("shutdown")
@@ -65,14 +74,38 @@ async def health_check():
 async def root():
     return {"message": "EnrichStory API v2.0.0"}
 
+@app.get("/debug/db")
+async def debug_db(db: Prisma = Depends(get_db)):
+    """Debug endpoint to check database status"""
+    try:
+        user_count = await db.user.count()
+        all_users = await db.user.find_many()
+        return {
+            "database_url": os.getenv('DATABASE_URL'),
+            "connected": db.is_connected(),
+            "user_count": user_count,
+            "users": [{
+                "id": user.id,
+                "email": user.email,
+                "fullName": user.fullName,
+                "isActive": user.isActive
+            } for user in all_users]
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "database_url": os.getenv('DATABASE_URL'),
+            "connected": db.is_connected() if db else False
+        }
+
 @app.post("/api/v1/enrich/company", response_model=CompanyResponse)
-async def enrich_company(request: CompanyRequest):
+async def enrich_company(company_request: CompanyRequest, request: Request, response: Response, auth_data: dict = Depends(require_credits)):
     try:
         import asyncio
         import time
         
         start_time = time.time()
-        logger.info(f"Starting super enrichment for domain: {request.domain}")
+        logger.info(f"Starting super enrichment for domain: {company_request.domain}")
         
         # Initialize results
         social_media_data = {}
@@ -80,10 +113,11 @@ async def enrich_company(request: CompanyRequest):
         brave_search_data = {}
         
         # Step 1: Extract social media if enabled
-        if request.extract_social_media and request.domain:
+        if company_request.extract_social_media and company_request.domain:
             try:
-                logger.info(f"Extracting social media for {request.domain}")
-                social_result = await social_media_extractor.extract_all_social_media(request.domain)
+                logger.info(f"Extracting social media for {company_request.domain}")
+                # Usar extract_social_media_info que aceita URL diretamente
+                social_result = await social_media_extractor.extract_social_media_info(f"https://{company_request.domain}")
                 if social_result and not social_result.get('error'):
                     social_media_data = social_result
                     logger.info(f"Social media extraction completed with confidence: {social_result.get('confidence_score', 0)}")
@@ -91,31 +125,50 @@ async def enrich_company(request: CompanyRequest):
                 logger.error(f"Error in social media extraction: {e}")
         
         # Step 2: Brave Search for LinkedIn if enabled
-        if request.use_brave_search and request.domain:
+        if company_request.use_brave_search:
             try:
-                logger.info(f"Searching for LinkedIn via Brave Search for {request.domain}")
-                company_name = request.name or request.domain.split('.')[0]
-                search_result = await brave_search_service.search_linkedin_company(company_name, request.domain)
-                if search_result and not search_result.get('error'):
-                    brave_search_data = search_result
-                    linkedin_url_from_search = search_result.get('linkedin_url')
-                    logger.info(f"Brave Search completed, LinkedIn URL: {linkedin_url_from_search}")
+                if company_request.domain:
+                    logger.info(f"Searching for LinkedIn via Brave Search for {company_request.domain}")
+                    company_name = company_request.name or company_request.domain.split('.')[0]
+                    search_result = await brave_search_service.search_company_linkedin(company_request.domain, company_name)
+                    if search_result and not search_result.get('error'):
+                        brave_search_data = search_result
+                        linkedin_url_from_search = search_result.get('linkedin_url')
+                        logger.info(f"Brave Search completed, LinkedIn URL: {linkedin_url_from_search}")
+                elif company_request.name:
+                    # Busca apenas por nome e localização quando não há domínio
+                    logger.info(f"Searching for company by name and location: {company_request.name}")
+                    search_result = await brave_search_service.search_company_by_name_location(
+                        company_request.name, company_request.region, company_request.country
+                    )
+                    if search_result and not search_result.get('error'):
+                        brave_search_data = search_result
+                        linkedin_url_from_search = search_result.get('linkedin_url')
+                        logger.info(f"Company search by name completed, LinkedIn URL: {linkedin_url_from_search}")
             except Exception as e:
                 logger.error(f"Error in Brave Search: {e}")
         
-        # Step 3: Use found LinkedIn URL or provided one
-        linkedin_url_to_use = request.linkedin_url or linkedin_url_from_search
+        # Step 3: Extract LinkedIn URL from social media data if not found via Brave Search
+        linkedin_url_from_social = None
+        if social_media_data and not linkedin_url_from_search:
+            # Check if LinkedIn URL is in social media data
+            if 'linkedin' in social_media_data and social_media_data['linkedin'].get('url'):
+                linkedin_url_from_social = social_media_data['linkedin']['url']
+                logger.info(f"LinkedIn URL found in social media data: {linkedin_url_from_social}")
+        
+        # Step 4: Use found LinkedIn URL or provided one
+        linkedin_url_to_use = company_request.linkedin_url or linkedin_url_from_search or linkedin_url_from_social
         
         # Verificar se temos LinkedIn URL para enriquecimento
         if linkedin_url_to_use:
             logger.info(f"Enriching company via LinkedIn URL: {linkedin_url_to_use}")
             
-            # Use enhanced LinkedIn scraper if we found URL via search
-            if linkedin_url_from_search and request.extract_linkedin:
+            # Use enhanced LinkedIn scraper if extract_linkedin is enabled
+            if company_request.extract_linkedin and linkedin_url_to_use:
                 try:
-                    logger.info(f"Using enhanced LinkedIn scraper for: {linkedin_url_from_search}")
+                    logger.info(f"Using enhanced LinkedIn scraper for: {linkedin_url_to_use}")
                     linkedin_enhanced_result = await enhanced_linkedin_scraper.scrape_linkedin_data(
-                        linkedin_url_from_search, request.domain
+                        linkedin_url_to_use, company_request.domain
                     )
                     if linkedin_enhanced_result and linkedin_enhanced_result.confidence_score > 0.5:
                         # Convert to expected format and return early with enhanced data
@@ -145,7 +198,7 @@ async def enrich_company(request: CompanyRequest):
                             "linkedin_data": {
                                 "confidence_score": linkedin_enhanced_result.confidence_score,
                                 "extraction_methods": linkedin_enhanced_result.extraction_methods,
-                                "linkedin_url": linkedin_url_from_search
+                                "linkedin_url": linkedin_url_to_use
                             },
                             "social_media_data": social_media_data,
                             "brave_search_data": brave_search_data,
@@ -158,7 +211,7 @@ async def enrich_company(request: CompanyRequest):
                     logger.error(f"Error with enhanced LinkedIn scraper: {e}")
             
             # Fallback to original LinkedIn enrichment
-            request_dict = request.model_dump()
+            request_dict = company_request.model_dump()
             request_dict['linkedin_url'] = linkedin_url_to_use
             linkedin_result = await company_enrichment_service._enrich_by_linkedin_crawlai(request_dict)
             
@@ -168,8 +221,8 @@ async def enrich_company(request: CompanyRequest):
                 return response_data
                 
             # Tentar enriquecimento via LinkedIn URL direta se o método anterior falhar
-            logger.info(f"Trying direct LinkedIn URL enrichment: {request.linkedin_url}")
-            linkedin_direct_result = await company_enrichment_service._enrich_by_linkedin_url(request.model_dump())
+            logger.info(f"Trying direct LinkedIn URL enrichment: {company_request.linkedin_url}")
+            linkedin_direct_result = await company_enrichment_service._enrich_by_linkedin_url(company_request.model_dump())
             
             if linkedin_direct_result and not linkedin_direct_result.get("error"):
                 response_data = linkedin_direct_result
@@ -177,10 +230,10 @@ async def enrich_company(request: CompanyRequest):
                 return response_data
         
         # Verificar se temos Instagram URL para enriquecimento
-        if request.instagram_url:
-            logger.info(f"Enriching company via Instagram URL: {request.instagram_url}")
+        if company_request.instagram_url:
+            logger.info(f"Enriching company via Instagram URL: {company_request.instagram_url}")
             # Usar o método específico para enriquecimento via Instagram
-            instagram_result = await company_enrichment_service._enrich_by_instagram({"instagram_url": request.instagram_url})
+            instagram_result = await company_enrichment_service._enrich_by_instagram({"instagram_url": company_request.instagram_url})
             
             if instagram_result and not instagram_result.get("error"):
                 response_data = instagram_result
@@ -188,7 +241,7 @@ async def enrich_company(request: CompanyRequest):
                 return response_data
         
         # Se não tiver LinkedIn URL ou Instagram URL, ou se o enriquecimento falhar, continuar com o fluxo normal
-        result = await company_enrichment_service.enrich_company(request.model_dump())
+        result = await company_enrichment_service.enrich_company(company_request.model_dump())
         
         # Extrair dados enriquecidos
         enriched_data = result.get("enriched_data", {})
@@ -196,17 +249,17 @@ async def enrich_company(request: CompanyRequest):
         
         # Verificar se houve erro de domínio não encontrado ou indisponível
         if result.get("error") and ("not found" in result["error"].lower() or "unavailable" in result["error"].lower()):
-            logger.info(f"Domain {request.domain} not found or unavailable, trying LLM enrichment")
+            logger.info(f"Domain {company_request.domain} not found or unavailable, trying LLM enrichment")
             
             # Usar o Enhanced LLM Enrichment Agent para enriquecer dados quando o domínio não for encontrado
             try:
                 # Use enhanced LLM agent with HTML content if available
                 html_content = "<html><body>No content available</body></html>"  # Fallback
                 llm_result = await enhanced_llm_agent.extract_company_info_from_html(
-                    html_content, request.domain
+                    html_content, company_request.domain
                 )
                 
-                logger.info(f"Enhanced LLM result for {request.domain}: confidence {llm_result.confidence_score}%")
+                logger.info(f"Enhanced LLM result for {company_request.domain}: confidence {llm_result.confidence_score}%")
                 if llm_result and llm_result.confidence_score > 0.3:
                     # Convert enhanced result to dict
                     response_data = {
@@ -226,7 +279,7 @@ async def enrich_company(request: CompanyRequest):
                             "processing_time": llm_result.processing_time
                         }
                     }
-                    logger.info(f"Enhanced LLM enrichment completed successfully for {request.domain}")
+                    logger.info(f"Enhanced LLM enrichment completed successfully for {company_request.domain}")
                     return response_data
             except Exception as e:
                 logger.error(f"Error using Enhanced LLM Enrichment Agent: {e}")
@@ -237,13 +290,13 @@ async def enrich_company(request: CompanyRequest):
             # Verificar se os dados do LinkedIn estão incompletos
             linkedin_data = response_data.get("linkedin_data", {})
             if linkedin_data and (not linkedin_data.get("description") or not linkedin_data.get("industry")):
-                logger.info(f"LinkedIn data incomplete for {request.domain}, using LLM to enrich")
+                logger.info(f"LinkedIn data incomplete for {company_request.domain}, using LLM to enrich")
                 
                 try:
                     # Use enhanced LLM agent for missing data enrichment
                     html_content = "<html><body>No content available</body></html>"  # Fallback
                     llm_result = await enhanced_llm_agent.enrich_missing_linkedin_data(
-                        response_data, html_content, request.domain
+                        response_data, html_content, company_request.domain
                     )
                     
                     # Convert back to enhanced result format for consistency
@@ -265,7 +318,7 @@ async def enrich_company(request: CompanyRequest):
                         
                         llm_result = MockResult(llm_result)
                     
-                    logger.info(f"Enhanced LLM result for {request.domain}: confidence {llm_result.confidence_score}%")
+                    logger.info(f"Enhanced LLM result for {company_request.domain}: confidence {llm_result.confidence_score}%")
                     if llm_result and llm_result.confidence_score > 0.3:
                         # Merge enhanced LLM data with existing data
                         if hasattr(llm_result, 'name'):  # Enhanced result object
@@ -307,7 +360,7 @@ async def enrich_company(request: CompanyRequest):
                             "processing_time": llm_result.processing_time
                         }
                         
-                        logger.info(f"Enhanced LLM enrichment completed successfully for {request.domain}")
+                        logger.info(f"Enhanced LLM enrichment completed successfully for {company_request.domain}")
                 except Exception as e:
                     logger.error(f"Error using Enhanced LLM Enrichment Agent: {e}")
                     # Não definir erro no response_data para continuar com os dados que já temos
@@ -396,7 +449,7 @@ async def enrich_company(request: CompanyRequest):
                             
         # Gerar URLs padrão para Instagram e LinkedIn se não existirem
         try:
-            domain = request.domain.replace('www.', '').split('.')[0]
+            domain = company_request.domain.replace('www.', '').split('.')[0]
             
             # Atualizar URLs vazias com valores padrão baseados no domínio
             if 'instagram' in response_data and isinstance(response_data['instagram'], dict):
@@ -477,24 +530,74 @@ async def enrich_company(request: CompanyRequest):
         else:
             response_data["enrich"] = False
             
-        logger.info(f"Super enrichment completed for {request.domain} in {time.time() - start_time:.2f}s")
+        logger.info(f"Super enrichment completed for {company_request.domain} in {time.time() - start_time:.2f}s")
+        
+        # Consumir créditos após sucesso
+        await credit_middleware.consume_credits_after_request(
+            auth_data=auth_data,
+            request=request,
+            response_status="success"
+        )
+        
+        # Adicionar header com créditos consumidos
+        response.headers["x-credits-used"] = "1"
+        
         return response_data
         
     except Exception as e:
-        logger.error(f"Error enriching company {request.domain}: {str(e)}")
+        logger.error(f"Error enriching company {company_request.domain}: {str(e)}")
+        
+        # Consumir créditos mesmo em caso de erro
+        try:
+            await credit_middleware.consume_credits_after_request(
+                auth_data=auth_data,
+                request=request,
+                response_status="error"
+            )
+        except:
+            pass  # Não falhar se houver erro no consumo de créditos
+        
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.post("/api/v1/enrich/person", response_model=PersonResponse)
-async def enrich_person(request: PersonRequest):
+async def enrich_person(person_request: PersonRequest, request: Request, response: Response, auth_data: dict = Depends(require_credits)):
     try:
-        result = await person_enrichment_service.enrich_person(request.model_dump())
+        result = await person_enrichment_service.enrich_person(**person_request.model_dump())
+        
+        # Consumir créditos após sucesso
+        await credit_middleware.consume_credits_after_request(
+            auth_data=auth_data,
+            request=request,
+            response_status="success"
+        )
+        
+        # Adicionar header com créditos consumidos
+        response.headers["x-credits-used"] = "1"
+        
         return result
     except Exception as e:
         logger.error(f"Error enriching person: {str(e)}")
+        
+        # Consumir créditos mesmo em caso de erro
+        try:
+            await credit_middleware.consume_credits_after_request(
+                auth_data=auth_data,
+                request=request,
+                response_status="error"
+            )
+        except:
+            pass  # Não falhar se houver erro no consumo de créditos
+        
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-app.include_router(auth_router)
-app.include_router(scrapp_router)
+app.include_router(auth_router, prefix="/api/v1")
+app.include_router(scrapp_router, prefix="/api/v1")
+app.include_router(api_keys_router)
+app.include_router(dashboard_router)
+app.include_router(profile_router)
+app.include_router(credits_router)
+app.include_router(auth_credits_router)
+app.include_router(docs_router)
 
 
 # Configuração do Sentry

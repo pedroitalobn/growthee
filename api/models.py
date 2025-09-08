@@ -17,7 +17,14 @@ class CompanyRequest(BaseModel):
 
     @property
     def has_valid_input(self) -> bool:
-        return bool(self.name or self.domain or self.linkedin_url or self.instagram_url)
+        """Verifica se a requisição tem pelo menos um campo válido para busca"""
+        # Aceita se tem domínio, URL do LinkedIn/Instagram, ou nome da empresa
+        # Se tem apenas nome, deve ter pelo menos região ou país para busca efetiva
+        if self.domain or self.linkedin_url or self.instagram_url:
+            return True
+        if self.name and (self.region or self.country):
+            return True
+        return bool(self.name)  # Aceita apenas nome como último recurso
 
 class SocialMedia(BaseModel):
     platform: str

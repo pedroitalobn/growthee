@@ -8,10 +8,12 @@ import logging
 try:
     from prisma import Prisma
     from api.auth.jwt_service import JWTService
+    from api.database import get_db
 except ImportError as e:
     logging.warning(f"Import warning in auth_middleware: {e}")
     Prisma = None
     JWTService = None
+    get_db = None
 
 security = HTTPBearer()
 
@@ -24,8 +26,8 @@ def get_jwt_service():
     return JWTService()
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security), 
-    db: Optional[Prisma] = None
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Prisma = Depends(get_db)
 ):
     """Middleware para autenticação JWT"""
     if db is None:
@@ -60,7 +62,7 @@ async def get_current_user(
             detail="Authentication service error"
         )
 
-async def check_api_key(request: Request, db: Optional[Prisma] = None):
+async def check_api_key(request: Request, db: Prisma = Depends(get_db)):
     """Middleware para autenticação via API Key"""
     if db is None:
         raise HTTPException(

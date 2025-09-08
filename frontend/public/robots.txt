@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /
+Allow: /login
+Allow: /signup
+Allow: /billing
+
+Disallow: /dashboard
+Disallow: /api/
+Disallow: /_next/
+Disallow: /admin/
+
+Sitemap: https://enrichstory.com/sitemap.xml

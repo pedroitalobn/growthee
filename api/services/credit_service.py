@@ -1,7 +1,7 @@
 from typing import Optional
 from prisma import Prisma
 from fastapi import HTTPException, status
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 
 class CreditService:
@@ -72,7 +72,7 @@ class CreditService:
                 "userId": user_id,
                 "createdAt": {"gte": from_date}
             },
-            order_by={"createdAt": "desc"}
+            order={"createdAt": "desc"}
         )
         
         total_used = sum(t.creditsUsed for t in transactions)

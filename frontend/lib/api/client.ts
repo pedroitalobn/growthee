@@ -43,15 +43,15 @@ apiClient.interceptors.response.use(
 // API Functions
 export const authApi = {
   login: async (emailOrUsername: string, password: string) => {
-    const response = await apiClient.post('/auth/login', { emailOrUsername, password })
+    const response = await apiClient.post('/api/v1/auth/login', { emailOrUsername, password })
     return response.data
   },
   register: async (data: any) => {
-    const response = await apiClient.post('/auth/register', data)
+    const response = await apiClient.post('/api/v1/auth/register', data)
     return response.data
   },
   refreshToken: async () => {
-    const response = await apiClient.post('/auth/refresh')
+    const response = await apiClient.post('/api/v1/auth/refresh')
     return response.data
   }
 }

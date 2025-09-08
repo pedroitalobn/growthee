@@ -1,9 +1,14 @@
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, HttpUrl
 from .services.hyperbrowser_instagram_scraper import HyperbrowserInstagramScraperService
+from .services.tiktok_scraper import TikTokScraperService
+from .services.generic_website_scraper import GenericWebsiteScraperService
+from .services.google_maps_scraper import GoogleMapsScraperService
+from .services.whatsapp_scraper import WhatsAppScraperService
 from .log_service import LogService
 from .firecrawl_client import FirecrawlApp
+from .middleware import require_credits
 import logging
 import re
 
@@ -17,6 +22,9 @@ router = APIRouter(prefix="/scrapp", tags=["scrapp"])
 # Inicialização dos serviços
 log_service = LogService()
 instagram_scraper = HyperbrowserInstagramScraperService(log_service=log_service)
+generic_scraper = GenericWebsiteScraperService(log_service=log_service)
+google_maps_scraper = GoogleMapsScraperService(log_service=log_service)
+whatsapp_scraper = WhatsAppScraperService(log_service=log_service)
 firecrawl_client = FirecrawlApp()
 
 # Função auxiliar para converter strings de números para inteiros
@@ -56,11 +64,82 @@ class InstagramScrapeRequest(BaseModel):
 class LinkedInScrapeRequest(BaseModel):
     url: HttpUrl
 
+class GenericWebsiteScrapeRequest(BaseModel):
+    url: HttpUrl
+    extraction_schema: Optional[Dict[str, Any]] = None
+    use_firecrawl: bool = True
+    use_crawl4ai: bool = True
+    extract_links: bool = False
+    extract_images: bool = False
+
+class GoogleMapsScrapeRequest(BaseModel):
+    url: HttpUrl
+    use_hyperbrowser: bool = True
+
+class GoogleMapsSearchRequest(BaseModel):
+    business_name: str
+    location: Optional[str] = None
+    use_hyperbrowser: bool = True
+
+class WhatsAppScrapeRequest(BaseModel):
+    url: HttpUrl
+    use_hyperbrowser: bool = True
+
+class WhatsAppSearchRequest(BaseModel):
+    business_name: str
+    location: Optional[str] = None
+    use_hyperbrowser: bool = True
+
 class RedditScrapeRequest(BaseModel):
     url: HttpUrl
 
 @router.post("/instagram", response_model=Dict[str, Any])
-async def scrape_instagram(request: InstagramScrapeRequest):
+async def scrape_instagram(request: InstagramScrapeRequest, req: Request, response: Response, auth_data: dict = Depends(require_credits)):
+    """Endpoint para extrair dados de perfis do Instagram"""
+    return await _scrape_instagram_internal(request, req, response)
+
+@router.post("/instagram/test", response_model=Dict[str, Any])
+async def scrape_instagram_test(request: InstagramScrapeRequest, req: Request, response: Response):
+    """Endpoint de teste para extrair dados de perfis do Instagram (sem autenticação)"""
+    return await _scrape_instagram_internal(request, req, response)
+
+class TikTokRequest(BaseModel):
+    url: HttpUrl
+
+@router.post("/tiktok")
+async def scrape_tiktok(request: TikTokRequest, user=Depends(require_credits)):
+    """Endpoint para scraping de perfis do TikTok"""
+    return await _scrape_tiktok_internal(str(request.url))
+
+@router.post("/tiktok/test")
+async def scrape_tiktok_test(request: TikTokRequest):
+    """Endpoint de teste para scraping do TikTok sem autenticação"""
+    return await _scrape_tiktok_internal(str(request.url))
+
+async def _scrape_tiktok_internal(url: str):
+    """Lógica interna de scraping do TikTok"""
+    try:
+        log_service = LogService()
+        tiktok_scraper = TikTokScraperService(log_service)
+        
+        result = await tiktok_scraper.scrape_profile(url)
+        
+        if "error" in result:
+            return {"success": False, "error": result["error"]}
+        
+        return {
+            "success": True,
+            "data": result,
+            "source": "tiktok_scraper"
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Erro interno no scraping do TikTok: {str(e)}"
+        }
+
+async def _scrape_instagram_internal(request: InstagramScrapeRequest, req: Request, response: Response):
     """Endpoint para extrair dados de perfis do Instagram"""
     try:
         # Extrair username da URL
@@ -234,8 +313,17 @@ async def scrape_instagram(request: InstagramScrapeRequest):
                 # Fim da implementação
 
 @router.post("/linkedin", response_model=Dict[str, Any])
-async def scrape_linkedin(request: LinkedInScrapeRequest):
+async def scrape_linkedin(request: LinkedInScrapeRequest, req: Request, response: Response, auth_data: dict = Depends(require_credits)):
     """Endpoint para extrair dados de perfis/empresas do LinkedIn"""
+    return await _scrape_linkedin_internal(request, req, response)
+
+@router.post("/linkedin/test", response_model=Dict[str, Any])
+async def scrape_linkedin_test(request: LinkedInScrapeRequest, req: Request, response: Response):
+    """Endpoint de teste para extrair dados de perfis/empresas do LinkedIn (sem autenticação)"""
+    return await _scrape_linkedin_internal(request, req, response)
+
+async def _scrape_linkedin_internal(request: LinkedInScrapeRequest, req: Request, response: Response):
+    """Lógica interna para scraping do LinkedIn"""
     try:
         # Implementação básica usando Crawl4AI
         from crawl4ai import AsyncWebCrawler
@@ -321,7 +409,7 @@ async def scrape_linkedin(request: LinkedInScrapeRequest):
                     
                     try:
                         # Tentar extrair dados estruturados diretamente com Firecrawl V2
-                        structured_data = firecrawl_client.extract_structured_data(url, schema, use_deepseek=True)
+                        structured_data = firecrawl_client.extract_structured_data(url, schema)
                         
                         if "error" not in structured_data:
                             # Adicionar URL original
@@ -330,7 +418,7 @@ async def scrape_linkedin(request: LinkedInScrapeRequest):
                         else:
                             # Tentar extrair dados estruturados do HTML com Firecrawl
                             logger.info(f"Tentando extrair dados do HTML com Firecrawl após falha na extração direta")
-                            structured_data = firecrawl_client.extract_structured_data_from_html(html_content, schema, use_deepseek=True)
+                            structured_data = firecrawl_client.extract_structured_data_from_html(html_content, schema)
                             
                             if "error" not in structured_data:
                                 # Adicionar URL original
@@ -358,7 +446,7 @@ async def scrape_linkedin(request: LinkedInScrapeRequest):
         return {"error": f"Erro ao processar a requisição: {str(e)}", "profile_url": url}
 
 @router.post("/reddit", response_model=Dict[str, Any])
-async def scrape_reddit(request: RedditScrapeRequest):
+async def scrape_reddit(request: RedditScrapeRequest, req: Request, response: Response, auth_data: dict = Depends(require_credits)):
     """Endpoint para extrair dados de perfis/posts do Reddit"""
     try:
         url = str(request.url)
@@ -469,3 +557,208 @@ async def scrape_reddit(request: RedditScrapeRequest):
     except Exception as e:
         logger.error(f"Erro ao fazer scraping do Reddit: {str(e)}")
         return {"error": f"Erro ao processar a requisição: {str(e)}", "url": url}
+
+@router.post("/website", response_model=Dict[str, Any])
+async def scrape_website(request: GenericWebsiteScrapeRequest, req: Request, response: Response, auth_data: dict = Depends(require_credits)):
+    """Endpoint para scraping genérico de websites com autenticação"""
+    return await _scrape_website_internal(request, req, response)
+
+@router.post("/website/test", response_model=Dict[str, Any])
+async def scrape_website_test(request: GenericWebsiteScrapeRequest, req: Request, response: Response):
+    """Endpoint de teste para scraping genérico de websites sem autenticação"""
+    return await _scrape_website_internal(request, req, response)
+
+async def _scrape_website_internal(request: GenericWebsiteScrapeRequest, req: Request, response: Response):
+    """Lógica interna para scraping genérico de websites"""
+    try:
+        url = str(request.url)
+        logger.info(f"Iniciando scraping genérico para: {url}")
+        
+        # Configurações de scraping
+        scrape_config = {
+            'use_firecrawl': request.use_firecrawl,
+            'use_crawl4ai': request.use_crawl4ai,
+            'extract_links': request.extract_links,
+            'extract_images': request.extract_images,
+            'extraction_schema': request.extraction_schema
+        }
+        
+        # Executar scraping
+        result = await generic_scraper.scrape_website(url, **scrape_config)
+        
+        if result.get('success'):
+            logger.info(f"Scraping genérico concluído com sucesso para: {url}")
+            return {
+                "success": True,
+                "url": url,
+                "data": result.get('data', {}),
+                "metadata": result.get('metadata', {}),
+                "links": result.get('links', []) if request.extract_links else [],
+                "images": result.get('images', []) if request.extract_images else [],
+                "structured_data": result.get('structured_data', {}) if request.extraction_schema else {}
+            }
+        else:
+            logger.error(f"Falha no scraping genérico para: {url} - {result.get('error')}")
+            return {
+                "success": False,
+                "url": url,
+                "error": result.get('error', 'Erro desconhecido no scraping')
+            }
+            
+    except Exception as e:
+        logger.error(f"Erro no scraping genérico: {str(e)}")
+        return {
+            "success": False,
+            "url": str(request.url),
+            "error": f"Erro ao processar a requisição: {str(e)}"
+        }
+
+@router.post("/google-maps", response_model=Dict[str, Any])
+async def scrape_google_maps(request: GoogleMapsScrapeRequest, req: Request, response: Response, auth_data: dict = Depends(require_credits)):
+    """Endpoint para scraping de dados de empresas do Google Maps com autenticação"""
+    return await _scrape_google_maps_internal(request, req, response)
+
+@router.post("/google-maps/test", response_model=Dict[str, Any])
+async def scrape_google_maps_test(request: GoogleMapsScrapeRequest, req: Request, response: Response):
+    """Endpoint de teste para scraping do Google Maps sem autenticação"""
+    return await _scrape_google_maps_internal(request, req, response)
+
+@router.post("/google-maps/search", response_model=Dict[str, Any])
+async def search_google_maps_business(request: GoogleMapsSearchRequest, req: Request, response: Response, auth_data: dict = Depends(require_credits)):
+    """Endpoint para buscar empresas no Google Maps por nome com autenticação"""
+    return await _search_google_maps_business_internal(request, req, response)
+
+@router.post("/google-maps/search/test", response_model=Dict[str, Any])
+async def search_google_maps_business_test(request: GoogleMapsSearchRequest, req: Request, response: Response):
+    """Endpoint de teste para buscar empresas no Google Maps por nome sem autenticação"""
+    return await _search_google_maps_business_internal(request, req, response)
+
+async def _scrape_google_maps_internal(request: GoogleMapsScrapeRequest, req: Request, response: Response) -> Dict[str, Any]:
+    """Lógica interna para scraping do Google Maps"""
+    try:
+        url = str(request.url)
+        
+        # Validar se é uma URL do Google Maps
+        if not re.search(r'(maps\.google\.|google\.com/maps|maps\.app\.goo\.gl)', url):
+            raise HTTPException(status_code=400, detail="URL inválida do Google Maps")
+        
+        # Fazer scraping usando o serviço
+        result = await google_maps_scraper.scrape_google_maps_business(
+            url=url,
+            use_hyperbrowser=request.use_hyperbrowser
+        )
+        
+        if result.get("success"):
+            logger.info(f"Scraping do Google Maps bem-sucedido: {url}")
+            return result
+        else:
+            logger.error(f"Falha no scraping do Google Maps: {result.get('error')}")
+            return result
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro no scraping do Google Maps: {str(e)}")
+        return {
+            "success": False,
+            "url": str(request.url),
+            "error": f"Erro ao processar a requisição: {str(e)}"
+        }
+
+async def _search_google_maps_business_internal(request: GoogleMapsSearchRequest, req: Request, response: Response) -> Dict[str, Any]:
+    """Lógica interna para busca de empresas no Google Maps"""
+    try:
+        # Fazer busca usando o serviço
+        result = await google_maps_scraper.search_business_by_name(
+            business_name=request.business_name,
+            location=request.location or ""
+        )
+        
+        if result.get("success"):
+            logger.info(f"Busca no Google Maps bem-sucedida: {request.business_name}")
+            return result
+        else:
+            logger.error(f"Falha na busca do Google Maps: {result.get('error')}")
+            return result
+            
+    except Exception as e:
+        logger.error(f"Erro na busca do Google Maps: {str(e)}")
+        return {
+            "success": False,
+            "query": request.business_name,
+            "error": f"Erro ao processar a requisição: {str(e)}"
+        }
+
+# Endpoints do WhatsApp
+@router.post("/whatsapp", response_model=Dict[str, Any])
+async def scrape_whatsapp(request: WhatsAppScrapeRequest, req: Request, response: Response, auth_data: dict = Depends(require_credits)):
+    return await _scrape_whatsapp_internal(request, req, response)
+
+@router.post("/whatsapp/test", response_model=Dict[str, Any])
+async def scrape_whatsapp_test(request: WhatsAppScrapeRequest, req: Request, response: Response):
+    return await _scrape_whatsapp_internal(request, req, response)
+
+@router.post("/whatsapp/search", response_model=Dict[str, Any])
+async def search_whatsapp_business(request: WhatsAppSearchRequest, req: Request, response: Response, auth_data: dict = Depends(require_credits)):
+    return await _search_whatsapp_business_internal(request, req, response)
+
+@router.post("/whatsapp/search/test", response_model=Dict[str, Any])
+async def search_whatsapp_business_test(request: WhatsAppSearchRequest, req: Request, response: Response):
+    return await _search_whatsapp_business_internal(request, req, response)
+
+async def _scrape_whatsapp_internal(request: WhatsAppScrapeRequest, req: Request, response: Response) -> Dict[str, Any]:
+    """Lógica interna para scraping do WhatsApp"""
+    try:
+        url = str(request.url)
+        
+        # Validar se é uma URL válida do WhatsApp
+        if not whatsapp_scraper.validate_whatsapp_url(url):
+            raise HTTPException(status_code=400, detail="URL inválida do WhatsApp")
+        
+        # Fazer scraping usando o serviço
+        result = await whatsapp_scraper.scrape_whatsapp_profile(
+            url=url,
+            use_hyperbrowser=request.use_hyperbrowser
+        )
+        
+        if result.get("success"):
+            logger.info(f"Scraping do WhatsApp bem-sucedido: {url}")
+            return result
+        else:
+            logger.warning(f"Falha no scraping do WhatsApp: {result.get('error', 'Erro desconhecido')}")
+            return result
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro no scraping do WhatsApp: {str(e)}")
+        return {
+            "success": False,
+            "error": f"Erro no scraping: {str(e)}",
+            "url": str(request.url)
+        }
+
+async def _search_whatsapp_business_internal(request: WhatsAppSearchRequest, req: Request, response: Response) -> Dict[str, Any]:
+    """Lógica interna para busca de WhatsApp Business"""
+    try:
+        # Fazer busca usando o serviço
+        result = await whatsapp_scraper.search_whatsapp_business(
+            business_name=request.business_name,
+            location=request.location,
+            use_hyperbrowser=request.use_hyperbrowser
+        )
+        
+        if result.get("success"):
+            logger.info(f"Busca do WhatsApp Business bem-sucedida: {request.business_name}")
+            return result
+        else:
+            logger.warning(f"Falha na busca do WhatsApp Business: {result.get('error', 'Erro desconhecido')}")
+            return result
+            
+    except Exception as e:
+        logger.error(f"Erro na busca do WhatsApp Business: {str(e)}")
+        return {
+            "success": False,
+            "error": f"Erro na busca: {str(e)}",
+            "business_name": request.business_name
+        }

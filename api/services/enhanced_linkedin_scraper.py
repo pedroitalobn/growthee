@@ -209,7 +209,7 @@ class EnhancedLinkedInScraper:
             # Se não temos dados suficientes, usar Brave Search para encontrar LinkedIn
             if result.confidence_score < 50:
                 self.log_service.log_debug(f"Buscando LinkedIn via Brave Search para {domain}")
-                linkedin_profile = await self.brave_search.search_linkedin_profile(domain, company_name)
+                linkedin_profile = await self.brave_search.search_company_linkedin(domain, company_name)
                 
                 if linkedin_profile:
                     # Tentar extrair dados do LinkedIn encontrado
@@ -234,62 +234,111 @@ class EnhancedLinkedInScraper:
                 "use_firecrawl": use_firecrawl
             })
             
-            # Obter HTML se não fornecido
+            # Obter conteúdo HTML e dados extraídos se não fornecido
             if not html_content:
-                html_content = await self._get_html_content(linkedin_url, use_firecrawl)
+                content_result = await self._get_html_content(linkedin_url, use_firecrawl)
+                if not content_result:
+                    self.log_service.log_debug("Não foi possível obter conteúdo")
+                    return LinkedInExtractionResult()
+                
+                html_content = content_result.get('html', '')
+                llm_extracted_data = content_result.get('extracted_data', {})
+                
+                # Se temos dados extraídos via LLM, usar como prioridade
+                if llm_extracted_data:
+                    self.log_service.log_debug(f"Dados extraídos via LLM: {list(llm_extracted_data.keys())}")
+                    result = self._convert_llm_data_to_result(llm_extracted_data, linkedin_url)
+                    
+                    # Se ainda precisamos de mais dados, aplicar estratégias tradicionais
+                    if result.confidence_score < 70 and html_content:
+                        self.log_service.log_debug("Complementando com estratégias tradicionais")
+                        extraction_results = await self._apply_extraction_strategies(html_content)
+                        traditional_result = await self._consolidate_and_validate(extraction_results, linkedin_url)
+                        result = self._merge_results(result, traditional_result)
+                    
+                    return result
             
-            if not html_content:
-                self.log_service.log_debug("Não foi possível obter conteúdo HTML")
-                return LinkedInExtractionResult()
+            # Fallback para estratégias tradicionais se não temos dados LLM
+            if html_content:
+                extraction_results = await self._apply_extraction_strategies(html_content)
+                final_result = await self._consolidate_and_validate(extraction_results, linkedin_url)
+                
+                self.log_service.log_debug("Scraping LinkedIn concluído", {
+                    "confidence_score": final_result.confidence_score,
+                    "methods_used": len(final_result.extraction_methods or [])
+                })
+                
+                return final_result
             
-            # Aplicar múltiplas estratégias de extração
-            extraction_results = await self._apply_extraction_strategies(html_content)
-            
-            # Consolidar e validar resultados
-            final_result = await self._consolidate_and_validate(extraction_results, linkedin_url)
-            
-            self.log_service.log_debug("Scraping LinkedIn concluído", {
-                "confidence_score": final_result.confidence_score,
-                "methods_used": len(final_result.extraction_methods or [])
-            })
-            
-            return final_result
+            return LinkedInExtractionResult()
             
         except Exception as e:
             self.log_service.log_debug(f"Erro no scraping LinkedIn aprimorado: {e}")
             return LinkedInExtractionResult()
     
-    async def _get_html_content(self, url: str, use_firecrawl: bool) -> Optional[str]:
-        """Obtém conteúdo HTML usando Firecrawl ou Crawl4AI"""
+    async def _get_html_content(self, url: str, use_firecrawl: bool) -> Optional[Dict[str, Any]]:
+        """Obtém conteúdo HTML e dados extraídos usando Firecrawl ou Crawl4AI"""
         try:
             if use_firecrawl:
-                return await self._scrape_with_firecrawl(url)
-            else:
-                return await self._scrape_with_crawlai(url)
+                result = await self._scrape_with_firecrawl(url)
+                if result:
+                    return result
+            
+            # Fallback para Crawl4AI (apenas HTML)
+            html_content = await self._scrape_with_crawlai(url)
+            if html_content:
+                return {'html': html_content, 'extracted_data': {}}
+            
+            return None
         except Exception as e:
             self.log_service.log_debug(f"Erro ao obter HTML: {e}")
             return None
     
-    async def _scrape_with_firecrawl(self, url: str) -> Optional[str]:
-        """Scraping usando Firecrawl com configurações otimizadas"""
+    async def _scrape_with_firecrawl(self, url: str) -> Optional[Dict[str, Any]]:
+        """Scraping usando Firecrawl com extração via LLM"""
         try:
             from firecrawl import FirecrawlApp
             
             app = FirecrawlApp(api_key=os.getenv('FIRECRAWL_API_KEY'))
             
+            # Schema para extração estruturada via LLM
+            extraction_schema = {
+                "type": "object",
+                "properties": {
+                    "company_name": {"type": "string", "description": "Nome oficial da empresa"},
+                    "description": {"type": "string", "description": "Descrição da empresa ou sobre nós"},
+                    "industry": {"type": "string", "description": "Setor ou indústria da empresa"},
+                    "employee_count": {"type": "string", "description": "Número de funcionários ou faixa (ex: 1000-5000)"},
+                    "headquarters": {"type": "string", "description": "Sede ou localização principal"},
+                    "founded": {"type": "string", "description": "Ano de fundação"},
+                    "website": {"type": "string", "description": "Website oficial da empresa"},
+                    "specialties": {"type": "string", "description": "Especialidades ou áreas de atuação"},
+                    "follower_count": {"type": "string", "description": "Número de seguidores no LinkedIn"},
+                    "country": {"type": "string", "description": "País da sede"},
+                    "city": {"type": "string", "description": "Cidade da sede"},
+                    "company_history": {"type": "string", "description": "História ou informações adicionais sobre a empresa"}
+                },
+                "required": []
+            }
+            
             scrape_result = app.scrape_url(
                 url,
                 params={
-                    'formats': ['html'],
-                    'includeTags': ['div', 'span', 'p', 'h1', 'h2', 'h3', 'a', 'meta', 'script'],
-                    'excludeTags': ['nav', 'footer', 'aside'],
+                    'formats': ['extract'],
+                    'extract': {
+                        'schema': extraction_schema,
+                        'prompt': 'Extraia informações detalhadas sobre esta empresa do LinkedIn. Seja preciso e completo.'
+                    },
                     'waitFor': 5000,
-                    'timeout': 45000,
-                    'onlyMainContent': False
+                    'timeout': 45000
                 }
             )
             
-            return scrape_result.get('html', '')
+            # Retorna tanto o HTML quanto os dados extraídos
+            return {
+                'html': scrape_result.get('html', ''),
+                'extracted_data': scrape_result.get('extract', {})
+            }
             
         except Exception as e:
             self.log_service.log_debug(f"Erro no Firecrawl: {e}")
@@ -356,6 +405,198 @@ class EnhancedLinkedInScraper:
             self.log_service.log_debug(f"Erro ao enriquecer dados: {e}")
             return linkedin_result
     
+    def _convert_llm_data_to_result(self, llm_data: Dict[str, Any], linkedin_url: str) -> LinkedInExtractionResult:
+        """Converte dados extraídos via LLM para LinkedInExtractionResult"""
+        result = LinkedInExtractionResult()
+        result.extraction_methods = ['firecrawl_llm']
+        
+        # Mapear campos do LLM para o resultado
+        field_mapping = {
+            'company_name': 'company_name',
+            'description': 'description',
+            'industry': 'industry',
+            'employee_count': 'employee_count_range',
+            'headquarters': 'headquarters',
+            'founded': 'founded',
+            'website': 'website',
+            'specialties': 'specialties',
+            'follower_count': 'follower_count',
+            'country': 'country',
+            'city': 'city',
+            'company_history': 'company_history'
+        }
+        
+        filled_fields = 0
+        for llm_field, result_field in field_mapping.items():
+            if llm_field in llm_data and llm_data[llm_field]:
+                value = llm_data[llm_field]
+                
+                # Processar campos específicos
+                if result_field == 'employee_count_range':
+                    result.employee_count_range = str(value)
+                    result.employee_count = self._parse_employee_count(str(value))
+                    result.employee_count_exact = result.employee_count
+                elif result_field == 'specialties' and isinstance(value, str):
+                    result.specialties = self._parse_specialties(value)
+                elif result_field == 'follower_count':
+                    result.follower_count = self._parse_number(str(value))
+                else:
+                    setattr(result, result_field, str(value).strip())
+                
+                filled_fields += 1
+        
+        # Processar localização
+        if result.headquarters and not result.country:
+            location_parts = result.headquarters.split(',')
+            if len(location_parts) >= 2:
+                result.city = location_parts[0].strip()
+                result.country = location_parts[-1].strip()
+                if len(location_parts) >= 3:
+                    result.region = location_parts[1].strip()
+        
+        # Gerar código do país
+        if result.country and not result.country_code:
+            result.country_code = self._get_country_code(result.country)
+        
+        # Calcular score de confiança baseado nos campos preenchidos
+        total_fields = len(field_mapping)
+        result.confidence_score = min((filled_fields / total_fields) * 100, 100.0)
+        
+        return result
+    
+    def _merge_results(self, llm_result: LinkedInExtractionResult, traditional_result: LinkedInExtractionResult) -> LinkedInExtractionResult:
+        """Mescla resultados do LLM com métodos tradicionais"""
+        # Usar LLM como base e preencher campos vazios com dados tradicionais
+        merged = llm_result
+        
+        # Lista de campos para verificar
+        fields_to_merge = [
+            'company_name', 'description', 'industry', 'company_size',
+            'headquarters', 'founded', 'website', 'specialties',
+            'country', 'city', 'region', 'company_history'
+        ]
+        
+        filled_count = 0
+        for field in fields_to_merge:
+            llm_value = getattr(merged, field)
+            traditional_value = getattr(traditional_result, field)
+            
+            # Se LLM não tem valor mas método tradicional tem, usar o tradicional
+            if not llm_value and traditional_value:
+                setattr(merged, field, traditional_value)
+                filled_count += 1
+            elif llm_value:
+                filled_count += 1
+        
+        # Mesclar métodos de extração
+        if merged.extraction_methods is None:
+            merged.extraction_methods = []
+        if traditional_result.extraction_methods:
+            merged.extraction_methods.extend(traditional_result.extraction_methods)
+        
+        # Recalcular score de confiança
+        base_score = (filled_count / len(fields_to_merge)) * 100
+        method_bonus = min(len(merged.extraction_methods) * 5, 20)
+        merged.confidence_score = min(base_score + method_bonus, 100.0)
+        
+        return merged
+    
+    def _parse_specialties(self, specialties_text: str) -> str:
+        """Parse specialties text from various formats"""
+        if not specialties_text:
+            return ""
+        
+        # Remove common prefixes and clean up
+        text = specialties_text.replace("Specialties:", "").replace("Areas:", "")
+        text = re.sub(r'^[•·-]\s*', '', text.strip())
+        
+        # Split by common separators and clean
+        separators = [',', '•', '·', '|', ';']
+        for sep in separators:
+            if sep in text:
+                parts = [part.strip() for part in text.split(sep) if part.strip()]
+                return ', '.join(parts)
+        
+        return text.strip()
+    
+    def _parse_number(self, text: str) -> int:
+        """Parse number from text (handles K, M suffixes)"""
+        if not text:
+            return 0
+        
+        # Remove non-numeric characters except K, M, B
+        clean_text = re.sub(r'[^0-9KMB.,]', '', text.upper())
+        
+        # Extract number and multiplier
+        match = re.search(r'([0-9.,]+)([KMB]?)', clean_text)
+        if not match:
+            return 0
+        
+        number_str = match.group(1).replace(',', '.')
+        multiplier = match.group(2)
+        
+        try:
+            number = float(number_str)
+            if multiplier == 'K':
+                number *= 1000
+            elif multiplier == 'M':
+                number *= 1000000
+            elif multiplier == 'B':
+                number *= 1000000000
+            
+            return int(number)
+        except ValueError:
+            return 0
+    
+    def _parse_employee_count(self, employee_text: str) -> int:
+        """Parse employee count from text"""
+        if not employee_text:
+            return 0
+        
+        # Look for ranges like "1,001-5,000" or "51-200"
+        range_match = re.search(r'([0-9,]+)\s*[-–]\s*([0-9,]+)', employee_text)
+        if range_match:
+            try:
+                start = int(range_match.group(1).replace(',', ''))
+                end = int(range_match.group(2).replace(',', ''))
+                return (start + end) // 2  # Return middle of range
+            except ValueError:
+                pass
+        
+        # Look for single numbers
+        number_match = re.search(r'([0-9,]+)', employee_text)
+        if number_match:
+            try:
+                return int(number_match.group(1).replace(',', ''))
+            except ValueError:
+                pass
+        
+        return 0
+    
+    def _get_country_code(self, country_name: str) -> str:
+        """Get country code from country name"""
+        if not country_name:
+            return ""
+        
+        country_codes = {
+            'united states': 'US', 'usa': 'US', 'america': 'US',
+            'united kingdom': 'GB', 'uk': 'GB', 'england': 'GB',
+            'canada': 'CA', 'brazil': 'BR', 'brasil': 'BR',
+            'germany': 'DE', 'deutschland': 'DE', 'france': 'FR',
+            'italy': 'IT', 'italia': 'IT', 'spain': 'ES', 'españa': 'ES',
+            'portugal': 'PT', 'netherlands': 'NL', 'holland': 'NL',
+            'australia': 'AU', 'japan': 'JP', 'china': 'CN',
+            'india': 'IN', 'mexico': 'MX', 'argentina': 'AR',
+            'chile': 'CL', 'colombia': 'CO', 'peru': 'PE',
+            'sweden': 'SE', 'norway': 'NO', 'denmark': 'DK',
+            'finland': 'FI', 'switzerland': 'CH', 'austria': 'AT',
+            'belgium': 'BE', 'ireland': 'IE', 'poland': 'PL',
+            'russia': 'RU', 'south korea': 'KR', 'singapore': 'SG'
+        }
+        
+        country_lower = country_name.lower().strip()
+        return country_codes.get(country_lower, '')
+    
     async def _apply_extraction_strategies(self, html_content: str) -> Dict[str, Dict[str, Any]]:
         """Aplica múltiplas estratégias de extração"""
         strategies = {
@@ -375,18 +616,39 @@ class EnhancedLinkedInScraper:
             soup = BeautifulSoup(html_content, 'html.parser')
             results = {}
             
+            # Log do tamanho do HTML para debug
+            self.log_service.log_debug(f"HTML content size: {len(html_content)} characters")
+            
+            # Verificar se é uma página do LinkedIn válida
+            if 'linkedin.com' not in html_content.lower():
+                self.log_service.log_warning("HTML content doesn't appear to be from LinkedIn")
+            
             for field, selectors in self.css_selectors.items():
-                for selector in selectors:
+                field_found = False
+                for i, selector in enumerate(selectors):
                     try:
                         elements = soup.select(selector)
+                        self.log_service.log_debug(f"Field '{field}', selector {i+1}/{len(selectors)} '{selector}': found {len(elements)} elements")
+                        
                         if elements:
-                            text = elements[0].get_text(strip=True)
+                            element = elements[0]
+                            text = element.get_text(strip=True)
+                            self.log_service.log_debug(f"Field '{field}', selector '{selector}': extracted text '{text[:100]}...'")
+                            
                             if text and len(text) > 2:
-                                results[field] = self._clean_extracted_text(text)
+                                cleaned_text = self._clean_extracted_text(text)
+                                results[field] = cleaned_text
+                                self.log_service.log_info(f"Successfully extracted '{field}': '{cleaned_text[:100]}...'")
+                                field_found = True
                                 break
-                    except Exception:
+                    except Exception as e:
+                        self.log_service.log_debug(f"Erro no seletor CSS {selector}: {e}")
                         continue
+                
+                if not field_found:
+                    self.log_service.log_warning(f"Field '{field}' not found with any CSS selector")
             
+            self.log_service.log_info(f"CSS extraction completed. Found {len(results)} fields: {list(results.keys())}")
             return results
             
         except Exception as e:
@@ -399,22 +661,38 @@ class EnhancedLinkedInScraper:
             results = {}
             
             for field, patterns in self.regex_patterns.items():
-                for pattern in patterns:
+                field_found = False
+                for i, pattern in enumerate(patterns):
                     try:
                         matches = re.findall(pattern, html_content, re.IGNORECASE | re.DOTALL)
+                        self.log_service.log_debug(f"Field '{field}', regex {i+1}/{len(patterns)}: found {len(matches)} matches")
+                        
                         if matches:
                             if field == 'employee_count' and len(matches[0]) > 1:
                                 # Tratar ranges de funcionários
-                                results[field] = f"{matches[0][0]}-{matches[0][1]}"
+                                result_text = f"{matches[0][0]}-{matches[0][1]}"
+                                results[field] = result_text
+                                self.log_service.log_info(f"Successfully extracted '{field}' via regex: '{result_text}'")
+                                field_found = True
+                                break
                             else:
                                 match_text = matches[0] if isinstance(matches[0], str) else matches[0][0]
+                                self.log_service.log_debug(f"Field '{field}', regex pattern: extracted match '{str(match_text)[:100]}...'")
+                                
                                 cleaned = self._clean_extracted_text(match_text)
                                 if cleaned:
                                     results[field] = cleaned
+                                    self.log_service.log_info(f"Successfully extracted '{field}' via regex: '{cleaned[:100]}...'")
+                                    field_found = True
                                     break
-                    except Exception:
+                    except Exception as e:
+                        self.log_service.log_debug(f"Erro no padrão regex {pattern}: {e}")
                         continue
+                
+                if not field_found:
+                    self.log_service.log_warning(f"Field '{field}' not found with any regex pattern")
             
+            self.log_service.log_info(f"Regex extraction completed. Found {len(results)} fields: {list(results.keys())}")
             return results
             
         except Exception as e:

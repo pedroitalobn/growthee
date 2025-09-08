@@ -2,6 +2,7 @@ import * as React from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useTranslations } from 'next-intl'
 
 interface CreateEndpointDialogProps {
   open?: boolean
@@ -10,6 +11,7 @@ interface CreateEndpointDialogProps {
 }
 
 export function CreateEndpointDialog({ open, onClose, onOpenChange }: CreateEndpointDialogProps) {
+  const t = useTranslations('admin')
   const [name, setName] = React.useState('')
   const [url, setUrl] = React.useState('')
 
@@ -28,31 +30,31 @@ export function CreateEndpointDialog({ open, onClose, onOpenChange }: CreateEndp
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>Criar Novo Endpoint</CardTitle>
+          <CardTitle>{t('createNewEndpoint')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <label className="text-sm font-medium">Nome</label>
+            <label className="text-sm font-medium">{t('name')}</label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Nome do endpoint"
+              placeholder={t('endpointNamePlaceholder')}
             />
           </div>
           <div>
-            <label className="text-sm font-medium">URL</label>
+            <label className="text-sm font-medium">{t('url')}</label>
             <Input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://api.exemplo.com"
+              placeholder={t('urlPlaceholder')}
             />
           </div>
           <div className="flex gap-2 justify-end">
             <Button variant="outline" onClick={handleClose}>
-              Cancelar
+              {t('cancel')}
             </Button>
             <Button onClick={handleClose}>
-              Criar
+              {t('create')}
             </Button>
           </div>
         </CardContent>

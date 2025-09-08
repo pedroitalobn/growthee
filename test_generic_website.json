@@ -1,0 +1,7 @@
+{
+  "url": "https://example.com",
+  "extract_links": true,
+  "extract_images": true,
+  "use_firecrawl": true,
+  "use_crawl4ai": true
+}

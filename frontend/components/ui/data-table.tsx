@@ -10,7 +10,7 @@ const DataTable = React.forwardRef<HTMLDivElement, DataTableProps>(
   ({ className, data = [], columns = [], ...props }, ref) => (
     <div
       ref={ref}
-      className={cn("w-full", className)}
+      className={cn("w-full fade-in", className)}
       {...props}
     >
       <div className="rounded-md border">
@@ -26,7 +26,7 @@ const DataTable = React.forwardRef<HTMLDivElement, DataTableProps>(
           </thead>
           <tbody>
             {data.map((row, rowIndex) => (
-              <tr key={rowIndex} className="border-b">
+              <tr key={rowIndex} className="border-b table-row-hover">
                 {columns.map((column, colIndex) => (
                   <td key={colIndex} className="p-4 align-middle">
                     {row[column.key] || '-'}

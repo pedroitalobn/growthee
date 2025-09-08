@@ -19,6 +19,7 @@ class User(BaseModel):
     email: EmailStr
     password_hash: str
     full_name: str
+    username: Optional[str] = None
     company_name: Optional[str] = None
     role: UserRole = UserRole.USER
     plan: PlanType = PlanType.FREE
@@ -81,4 +82,7 @@ class APIKeyResponse(BaseModel):
     id: str
     name: str
     key: str
-    created_at: datetime
+    isActive: bool
+    createdAt: datetime
+    lastUsed: Optional[datetime] = None
+    usageCount: int = 0

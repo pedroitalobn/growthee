@@ -1136,11 +1136,100 @@ class CompanyEnrichmentService:
         from api.services.hyperbrowser_instagram_scraper import HyperbrowserInstagramScraperService
         self.instagram_scraper = HyperbrowserInstagramScraperService(log_service)
 
+    async def _enrich_by_name_location(self, company_data: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Enriquece dados da empresa usando apenas nome e localização"""
+        name = company_data.get("name")
+        region = company_data.get("region")
+        country = company_data.get("country")
+        
+        try:
+            # Usar o BraveSearchService para buscar informações da empresa
+            search_result = await self.brave_search_service.search_company_by_name_location(
+                name=name,
+                region=region,
+                country=country
+            )
+            
+            if not search_result:
+                return self._create_empty_result()
+            
+            # Converter dados para o formato esperado
+            enriched_data = {
+                'company_name': search_result.get('company_name', name),
+                'description': None,
+                'industry': None,
+                'employee_count': None,
+                'headquarters': None,
+                'country': search_result.get('country', country),
+                'region': search_result.get('region', region),
+                'city': None,
+                'founded': None,
+                'website': search_result.get('website'),
+                'linkedin_url': search_result.get('linkedin_url'),
+                'social_media': search_result.get('social_media', {}),
+                'contact_info': {},  # Converter lista para dict vazio por enquanto
+                'confidence_score': 0.7 if search_result.get('linkedin_url') else 0.5,
+                'data_source': 'brave_search',
+                'enrich': True,
+                'error': None
+            }
+            
+            # Extrair descrição dos resultados de busca
+            descriptions = search_result.get('descriptions', [])
+            if descriptions and len(descriptions) > 0:
+                enriched_data['description'] = descriptions[0].get('description', '')
+            
+            # Se encontrou LinkedIn URL, usar para enriquecimento adicional
+            linkedin_url = search_result.get("linkedin_url")
+            if linkedin_url:
+                linkedin_data = await self._enrich_by_linkedin_url(linkedin_url)
+                if linkedin_data:
+                    # Combinar dados do LinkedIn com dados do Brave Search
+                    for key, value in linkedin_data.items():
+                        if value and key in enriched_data:
+                            enriched_data[key] = value
+            
+            return enriched_data
+            
+        except Exception as e:
+            self.log_service.log_debug(f"Error in name/location enrichment: {str(e)}")
+            return self._create_empty_result()
+
+    def _create_empty_result(self) -> Dict[str, Any]:
+        """Retorna resultado vazio padronizado"""
+        return {
+            'company_name': None,
+            'description': None,
+            'industry': None,
+            'employee_count': None,
+            'headquarters': None,
+            'country': None,
+            'region': None,
+            'city': None,
+            'founded': None,
+            'website': None,
+            'linkedin_url': None,
+            'social_media': {},
+            'contact_info': {},
+            'confidence_score': 0.0,
+            'data_source': 'name_location_search',
+            'enrich': False,
+            'error': 'No data found'
+        }
+
     async def enrich_company(self, company_data: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
         """Enriquece os dados de uma empresa, orquestrando a busca e o scraping"""
         domain = company_data.get("domain")
+        name = company_data.get("name")
+        region = company_data.get("region")
+        country = company_data.get("country")
+        
+        # Se não há domínio, mas há nome e localização, usar busca por nome
+        if not domain and name and (region or country):
+            return await self._enrich_by_name_location(company_data, user_id)
+        
         if not domain:
-            raise ValueError("O domínio da empresa é obrigatório")
+            raise ValueError("O domínio da empresa é obrigatório quando não há nome e localização")
 
         schema = company_data.get("schema", self._get_default_schema())
         
@@ -4865,57 +4954,6 @@ class CompanyEnrichmentService:
         
         return merged_data
 
-class PersonEnrichmentService:
-    def __init__(self):
-        load_dotenv()
-        self.brave_limiter = BraveSearchRateLimiter()
-        self.session = None
-        self.browser = None
-        self.context = None
-        self.page = None
-        self.linkedin_session = None
-        self.linkedin_browser = None
-        self.linkedin_context = None
-        self.linkedin_page = None
-        self.log_service = LogService()
-        self.brave_token = os.getenv('BRAVE_SEARCH_API_KEY') or os.getenv('BRAVE_API_KEY')
-        self.rate_limiter = BraveSearchRateLimiter()
-        self.firecrawl_api_key = os.getenv('FIRECRAWL_API_KEY')
-        
-        if not self.brave_token:
-            raise ValueError("BRAVE_SEARCH_API_KEY não encontrado no arquivo .env")
-
-    async def enrich_person(self, **kwargs) -> Dict[str, Any]:
-        """
-        Enriquece dados de pessoa usando múltiplas estratégias
-        """
-        self.log_service.log_debug("Starting person enrichment", {"params": kwargs})
-        
-        strategies = [
-            self._enrich_by_linkedin_url,
-            self._enrich_by_email,
-            self._enrich_by_name_company,
-            self._enrich_by_domain,
-            self._enrich_by_phone,
-            self._enrich_by_general_search
-        ]
-        
-        for strategy in strategies:
-            try:
-                self.log_service.log_debug(f"Trying strategy: {strategy.__name__}", {})
-                result = await strategy(kwargs)
-                if result and result.get('confidence_score', 0) > 0.6:
-                    self.log_service.log_debug(f"Strategy {strategy.__name__} successful", {
-                        "confidence_score": result.get('confidence_score'),
-                        "name": result.get('full_name')
-                    })
-                    return result
-            except Exception as e:
-                self.log_service.log_debug(f"Strategy {strategy.__name__} failed", {"error": str(e)})
-                continue
-        
-        return self._create_empty_result()
-    
     async def _enrich_by_linkedin_url(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Enriquecimento por LinkedIn URL usando CrawlAI"""
         try:
@@ -4945,35 +4983,64 @@ class PersonEnrichmentService:
                 if company_data:
                     company_data['linkedin_url'] = linkedin_url
                     return company_data
-            else:
-                # Enriquecimento para pessoas
-                async with CrawlAIService(self.log_service) as crawl_service:
-                    person_data = await crawl_service.scrape_linkedin_person(linkedin_url)
-                    
-                    if person_data and not person_data.get("error"):
-                        person_data['linkedin_url'] = linkedin_url
-                        # Formatar resultado
-                        formatted_result = self._format_person_result(person_data, source="crawl4ai_linkedin")
-                        return formatted_result
-                
-                # Fallback para método tradicional se CrawlAI falhar
-                person_data = await self._scrape_linkedin_person(linkedin_url)
-                if person_data:
-                    person_data['linkedin_url'] = linkedin_url
-                    return self._format_person_result(person_data, source='linkedin_direct')
-                    
-                # Segundo fallback usando Firecrawl
-                person_data = await self._scrape_linkedin_person_with_firecrawl(linkedin_url)
-                if person_data:
-                    person_data['linkedin_url'] = linkedin_url
-                    return self._format_person_result(person_data, source='firecrawl_linkedin')
             
-            self.log_service.log_debug("LinkedIn URL enrichment failed", {"url": linkedin_url})
             return None
             
         except Exception as e:
-            self.log_service.log_debug("Error in LinkedIn URL enrichment", {"error": str(e)})
+            self.log_service.log_error(f"Erro no enriquecimento por LinkedIn URL: {str(e)}")
             return None
+
+class PersonEnrichmentService:
+    def __init__(self):
+        load_dotenv()
+        self.brave_limiter = BraveSearchRateLimiter()
+        self.session = None
+        self.browser = None
+        self.context = None
+        self.page = None
+        self.linkedin_session = None
+        self.linkedin_browser = None
+        self.linkedin_context = None
+        self.linkedin_page = None
+        self.log_service = LogService()
+        self.brave_token = os.getenv('BRAVE_SEARCH_API_KEY') or os.getenv('BRAVE_API_KEY')
+        self.rate_limiter = BraveSearchRateLimiter()
+        self.firecrawl_api_key = os.getenv('FIRECRAWL_API_KEY')
+        
+        if not self.brave_token:
+            raise ValueError("BRAVE_SEARCH_API_KEY não encontrado no arquivo .env")
+
+    async def enrich_person(self, **kwargs) -> Dict[str, Any]:
+        """
+        Enriquece dados de pessoa usando múltiplas estratégias
+        """
+        self.log_service.log_debug("Starting person enrichment", {"params": kwargs})
+        
+        strategies = [
+            self._enrich_by_email,
+            self._enrich_by_name_company,
+            self._enrich_by_domain,
+            self._enrich_by_phone,
+            self._enrich_by_general_search
+        ]
+        
+        for strategy in strategies:
+            try:
+                self.log_service.log_debug(f"Trying strategy: {strategy.__name__}", {})
+                result = await strategy(kwargs)
+                if result and result.get('confidence_score', 0) > 0.6:
+                    self.log_service.log_debug(f"Strategy {strategy.__name__} successful", {
+                        "confidence_score": result.get('confidence_score'),
+                        "name": result.get('full_name')
+                    })
+                    return result
+            except Exception as e:
+                self.log_service.log_debug(f"Strategy {strategy.__name__} failed", {"error": str(e)})
+                continue
+        
+        return self._create_empty_result()
+    
+    # Método _enrich_by_linkedin_url removido - agora está na CompanyEnrichmentService
 
     async def _enrich_by_email(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Estratégia 2: Busca por email"""
