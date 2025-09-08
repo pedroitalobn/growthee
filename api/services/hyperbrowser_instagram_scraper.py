@@ -90,7 +90,7 @@ class HyperbrowserInstagramScraperService:
                 result = firecrawl.extract_structured_data(
                     url=url,
                     schema=schema,
-                    prompt="Extract all available information from this Instagram profile"
+                    prompt="Extract all available information from this Instagram profile. Pay special attention to contact information: extract ALL emails, phone numbers, and WhatsApp numbers found in the bio, contact section, or any visible text. Look for multiple contact methods as businesses often list several ways to reach them. Include website links, business addresses, and any social media handles mentioned."
                 )
                 
                 if result and not result.get("error"):
@@ -111,7 +111,7 @@ class HyperbrowserInstagramScraperService:
                 tool_name="extract_structured_data",
                 args={
                     "urls": [url],
-                    "prompt": "Extract all available information from this Instagram profile",
+                    "prompt": "Extract all available information from this Instagram profile. Pay special attention to contact information: extract ALL emails, phone numbers, and WhatsApp numbers found in the bio, contact section, or any visible text. Look for multiple contact methods as businesses often list several ways to reach them. Include website links, business addresses, and any social media handles mentioned.",
                     "schema": schema,
                     "sessionOptions": {
                         "useProxy": True,

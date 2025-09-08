@@ -130,7 +130,7 @@ class PuppeteerInstagramScraperService:
                 result = firecrawl.extract_structured_data(
                     url=url,
                     schema=schema,
-                    prompt="Extract all available information from this Instagram profile page including username, name, bio, followers count, following count, posts count, website, email, business category, and location."
+                    prompt="Extract all available information from this Instagram profile page including username, name, bio, followers count, following count, posts count, website, email, business category, and location. Pay special attention to contact information: extract ALL emails, phone numbers, and WhatsApp numbers found in the bio, contact section, or any visible text. Look for multiple contact methods as businesses often list several ways to reach them. Include website links, business addresses, and any social media handles mentioned."
                 )
                 
                 if result and not result.get("error"):
@@ -157,7 +157,7 @@ class PuppeteerInstagramScraperService:
                 tool_name="extract_structured_data",
                 args={
                     "urls": [url],
-                    "prompt": "Extract all available information from this Instagram profile page including username, name, bio, followers count, following count, posts count, website, email, business category, and location.",
+                    "prompt": "Extract all available information from this Instagram profile page including username, name, bio, followers count, following count, posts count, website, email, business category, and location. Pay special attention to contact information: extract ALL emails, phone numbers, and WhatsApp numbers found in the bio, contact section, or any visible text. Look for multiple contact methods as businesses often list several ways to reach them. Include website links, business addresses, and any social media handles mentioned.",
                     "schema": instagram_schema,
                     "sessionOptions": session_options
                 }

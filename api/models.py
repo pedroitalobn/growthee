@@ -35,8 +35,11 @@ class InstagramData(BaseModel):
     url: Optional[str] = None
     name: Optional[str] = None
     user: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
+    email: Optional[str] = None  # Mantido para compatibilidade
+    phone: Optional[str] = None  # Mantido para compatibilidade
+    emails: Optional[List[str]] = []  # Novo campo para múltiplos emails
+    phones: Optional[List[str]] = []  # Novo campo para múltiplos telefones
+    whatsapps: Optional[List[str]] = []  # Novo campo para múltiplos whatsapps
     bio: Optional[str] = None
     followers: Optional[int] = None
     following: Optional[int] = None

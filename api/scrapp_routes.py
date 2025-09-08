@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from typing import Dict, Any, Optional
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, model_validator
 from .services.hyperbrowser_instagram_scraper import HyperbrowserInstagramScraperService
 from .services.tiktok_scraper import TikTokScraperService
 from .services.generic_website_scraper import GenericWebsiteScraperService
@@ -9,8 +9,10 @@ from .services.whatsapp_scraper import WhatsAppScraperService
 from .log_service import LogService
 from .firecrawl_client import FirecrawlApp
 from .middleware import require_credits
+from .mcp_client import run_mcp
 import logging
 import re
+import asyncio
 
 # Configuração de logging
 logging.basicConfig(level=logging.INFO)
@@ -59,7 +61,14 @@ def _convert_to_int(value: Optional[str]) -> Optional[int]:
 
 # Modelos de dados
 class InstagramScrapeRequest(BaseModel):
-    url: HttpUrl
+    url: Optional[HttpUrl] = None
+    username: Optional[str] = None
+    
+    @model_validator(mode='after')
+    def validate_input(self):
+        if not self.url and not self.username:
+            raise ValueError('Deve fornecer url ou username')
+        return self
 
 class LinkedInScrapeRequest(BaseModel):
     url: HttpUrl
@@ -140,93 +149,238 @@ async def _scrape_tiktok_internal(url: str):
         }
 
 async def _scrape_instagram_internal(request: InstagramScrapeRequest, req: Request, response: Response):
-    """Endpoint para extrair dados de perfis do Instagram"""
-    try:
+    """Endpoint para extrair dados completos de perfis do Instagram incluindo contatos"""
+    # Determinar username - pode vir da URL ou do campo username
+    username_str = None
+    
+    if request.username:
+        # Remove @ se presente
+        username_str = request.username.lstrip('@')
+    elif request.url:
         # Extrair username da URL
+        import re as regex_module
         url = str(request.url)
-        username = re.search(r'instagram\.com/([^/?]+)', url)
-        if not username:
-            raise HTTPException(status_code=400, detail="URL inválida do Instagram")
+        username_match = regex_module.search(r'instagram\.com/([^/?]+)', url)
+        if username_match:
+            username_str = username_match.group(1)
+    
+    if not username_str:
+        raise HTTPException(status_code=400, detail="Username ou URL válida do Instagram é obrigatório")
+    
+    # Normalizar URL
+    normalized_url = f"https://www.instagram.com/{username_str}/"
+    
+    # Usar o novo serviço aprimorado para extração completa
+    try:
+        from api.services.enhanced_instagram_scraper import EnhancedInstagramScraperService
         
-        # Normalizar URL
-        normalized_url = f"https://www.instagram.com/{username.group(1)}/"
+        enhanced_scraper = EnhancedInstagramScraperService()
+        result = await enhanced_scraper.scrape_profile_complete(normalized_url)
         
-        # Inicializar resultado padrão
-        result_data = {"profile_url": normalized_url, "username": username.group(1)}
-        
-        # Definir schema para extração estruturada
-        instagram_schema = {
-            "type": "object",
-            "properties": {
-                "username": {"type": "string", "description": "Nome de usuário (@username) sem o @"},
-                "name": {"type": "string", "description": "Nome de exibição do perfil"},
-                "bio": {"type": "string", "description": "Biografia/descrição do perfil"},
-                "followers": {"type": "string", "description": "Número de seguidores"},
-                "following": {"type": "string", "description": "Número de pessoas seguindo"},
-                "posts": {"type": "string", "description": "Número de posts"},
-                "email": {"type": "string", "description": "Email encontrado na bio (se houver)"},
-                "phone": {"type": "string", "description": "Telefone encontrado na bio (se houver)"},
-                "website": {"type": "string", "description": "Website/link encontrado na bio (se houver)"},
-                "location": {"type": "string", "description": "Localização mencionada na bio (se houver)"},
-                "business_category": {"type": "string", "description": "Categoria do negócio (se for conta business)"}
-            },
-            "required": ["username", "name"]
-        }
-        
-        try:
-            # Primeiro tentar com Crawl4AI
-            try:
-                from crawl4ai import AsyncWebCrawler
-                
-                async with AsyncWebCrawler(verbose=False) as crawler:
-                    result = await crawler.arun(
-                        url=normalized_url,
-                        word_count_threshold=10,
-                        bypass_cache=True,
-                        wait_for="css:.x9f619.x1n2onr6",  # Seletor comum em perfis do Instagram
-                        delay_before_return_html=5.0,
-                        page_timeout=45000,
-                        js_code=[
-                            "window.scrollTo(0, document.body.scrollHeight/3);",
-                            "await new Promise(resolve => setTimeout(resolve, 2000));",
-                            "window.scrollTo(0, document.body.scrollHeight/2);",
-                            "await new Promise(resolve => setTimeout(resolve, 2000));"
-                        ]
-                    )
-                    
-                    if result.success and result.html:
-                        html_content = result.html
-                        
-                        # Extrair dados estruturados usando Firecrawl com DeepSeek como LLM
-                        structured_data = firecrawl_client.extract_structured_data_from_html(html_content, instagram_schema, use_deepseek=True)
-                        
-                        if "error" not in structured_data:
-                            # Processar dados numéricos
-                            structured_data["followers_count"] = _convert_to_int(structured_data.get("followers"))
-                            structured_data["following_count"] = _convert_to_int(structured_data.get("following"))
-                            structured_data["posts_count"] = _convert_to_int(structured_data.get("posts"))
-                            
-                            # Adicionar URL original
-                            structured_data["profile_url"] = normalized_url
-                            return structured_data
-                        else:
-                            logger.error(f"Erro na extração estruturada com Crawl4AI+Firecrawl: {structured_data['error']}")
-                            result_data["error"] = structured_data["error"]
-                    else:
-                        logger.error("Falha ao extrair HTML com Crawl4AI")
-                        result_data["error"] = "Falha ao extrair HTML com Crawl4AI"
-            except Exception as crawl4ai_error:
-                logger.error(f"Erro no Crawl4AI: {str(crawl4ai_error)}")
-                result_data["error"] = f"Erro no Crawl4AI: {str(crawl4ai_error)}"
+        if result.get("success"):
+            data = result["data"]
             
-            # Se Crawl4AI falhar, tentar com Firecrawl
-            try:
-                # Tentar extração estruturada diretamente com Firecrawl V2
-                structured_data = firecrawl_client.extract_structured_data(
-                    normalized_url, 
-                    instagram_schema, 
-                    use_deepseek=True
-                )
+            # Adicionar raw_markdown para compatibilidade
+            final_data = {
+                "success": True,
+                "username": data.get("username", username_str),
+                "name": data.get("name"),
+                "bio": data.get("bio"),
+                "followers": data.get("followers"),
+                "following": data.get("following"),
+                "posts": data.get("posts"),
+                "followers_count": data.get("followers_count"),
+                "following_count": data.get("following_count"),
+                "posts_count": data.get("posts_count"),
+                "email": data.get("email"),
+                "phone": data.get("phone"),
+                "whatsapp": data.get("whatsapp"),  # Campo específico para WhatsApp
+                "website": data.get("website"),
+                "location": data.get("location"),
+                "business_category": data.get("business_category"),
+                "profile_url": normalized_url,
+                "url": normalized_url,
+                "raw_markdown": result.get("raw_content", "")[:500]  # Para debug
+            }
+            
+            logger.info(f"Enhanced Instagram data extracted successfully: {final_data.get('username')} - WhatsApp: {bool(final_data.get('whatsapp'))} - Email: {bool(final_data.get('email'))}")
+            return final_data
+        else:
+            logger.error(f"Enhanced scraper failed: {result.get('error')}")
+            # Fallback para o método anterior se o novo falhar
+            pass
+            
+    except Exception as enhanced_error:
+        logger.error(f"Enhanced scraper error: {str(enhanced_error)}")
+        # Fallback para o método anterior
+        pass
+    
+    # FALLBACK: Usar método anterior se o enhanced falhar
+    # Inicializar resultado padrão
+    result_data = {"profile_url": normalized_url, "username": username_str}
+    
+    # Definir schema para extração estruturada
+    instagram_schema = {
+        "type": "object",
+        "properties": {
+            "username": {"type": "string", "description": "Nome de usuário (@username) sem o @"},
+            "name": {"type": "string", "description": "Nome de exibição do perfil"},
+            "bio": {"type": "string", "description": "Biografia/descrição do perfil"},
+            "followers": {"type": "string", "description": "Número de seguidores"},
+            "following": {"type": "string", "description": "Número de pessoas seguindo"},
+            "posts": {"type": "string", "description": "Número de posts"},
+            "email": {"type": "string", "description": "Email encontrado na bio (se houver)"},
+            "phone": {"type": "string", "description": "Telefone encontrado na bio (se houver)"},
+            "website": {"type": "string", "description": "Website/link encontrado na bio (se houver)"},
+            "location": {"type": "string", "description": "Localização mencionada na bio (se houver)"},
+            "business_category": {"type": "string", "description": "Categoria do negócio (se for conta business)"}
+        },
+        "required": ["username", "name"]
+    }
+    
+    # Usar Hyperbrowser com Claude agent para extração completa (método anterior)
+    try:
+        claude_result = await run_mcp(
+            server_name="mcp.config.usrlocalmcp.Hyperbrowser",
+            tool_name="scrape_webpage",
+            args={
+                "url": normalized_url,
+                "outputFormat": ["markdown"]
+            }
+        )
+        
+        if claude_result and "result" in claude_result:
+            # Parse the extracted data from Claude's response (markdown format)
+            extracted_text = claude_result["result"]
+            
+            # Use regex and parsing to extract structured data
+            import re
+            
+            # Extract follower count
+            followers_match = re.search(r'(\d+(?:,\d+)*(?:\.\d+)?[KMB]?)\s*(?:followers?|seguidores?)', extracted_text, re.IGNORECASE)
+            followers = followers_match.group(1) if followers_match else None
+            
+            # Extract following count
+            following_match = re.search(r'(\d+(?:,\d+)*(?:\.\d+)?[KMB]?)\s*(?:following|seguindo)', extracted_text, re.IGNORECASE)
+            following = following_match.group(1) if following_match else None
+            
+            # Extract posts count
+            posts_match = re.search(r'(\d+(?:,\d+)*(?:\.\d+)?[KMB]?)\s*(?:posts?|publicações?)', extracted_text, re.IGNORECASE)
+            posts = posts_match.group(1) if posts_match else None
+            
+            # Extract email
+            email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', extracted_text)
+            email = email_match.group(1) if email_match else None
+            
+            # Extract phone
+            phone_match = re.search(r'(\+?\d{1,4}[\s.-]?\(?\d{1,4}\)?[\s.-]?\d{1,4}[\s.-]?\d{1,9})', extracted_text)
+            phone = phone_match.group(1) if phone_match else None
+            
+            # Extract website/URL
+            url_match = re.search(r'(https?://[^\s]+|www\.[^\s]+)', extracted_text)
+            website = url_match.group(1) if url_match else None
+            
+            # Extract name and bio from markdown content
+            lines = extracted_text.split('\n')
+            name = None
+            bio = None
+            
+            # Try to extract name from markdown headers first
+            header_match = re.search(r'^#+\s*([^\n]+)', extracted_text, re.MULTILINE)
+            if header_match:
+                name = header_match.group(1).strip()
+            
+            # Extract bio from non-header lines
+            for i, line in enumerate(lines):
+                line = line.strip()
+                if line and not line.startswith('#') and not any(keyword in line.lower() for keyword in ['followers', 'following', 'posts', 'http']):
+                    if not name and len(line) < 50:  # Likely the name if not found in headers
+                        name = line
+                    elif not bio and len(line) > 10:  # Likely the bio
+                        bio = line
+                        break
+            
+            final_data = {
+                "success": True,
+                "username": username_str,
+                "name": name,
+                "bio": bio,
+                "followers": followers,
+                "following": following,
+                "posts": posts,
+                "followers_count": _convert_to_int(followers) if followers else None,
+                "following_count": _convert_to_int(following) if following else None,
+                "posts_count": _convert_to_int(posts) if posts else None,
+                "email": email,
+                "phone": phone,
+                "website": website,
+                "location": None,
+                "business_category": None,
+                "profile_url": normalized_url,
+                "url": normalized_url,
+                "raw_markdown": extracted_text[:500]  # First 500 chars for debugging
+            }
+            
+            logger.info(f"Instagram data extracted successfully with Hyperbrowser: {final_data.get('username')}")
+            return final_data
+        else:
+            logger.error(f"Erro no Hyperbrowser: {claude_result.get('error') if claude_result else 'Dados não extraídos'}")
+            result_data["error"] = claude_result.get("error") if claude_result else "Dados não extraídos pelo Hyperbrowser"
+    except Exception as hyperbrowser_error:
+        logger.error(f"Erro no Hyperbrowser: {str(hyperbrowser_error)}")
+        result_data["error"] = f"Erro no Hyperbrowser: {str(hyperbrowser_error)}"
+            
+    # Se Hyperbrowser falhar, tentar com Firecrawl
+    try:
+        # Tentar extração estruturada diretamente com Firecrawl V2
+        structured_data = firecrawl_client.extract_structured_data(
+            normalized_url, 
+            instagram_schema, 
+            use_deepseek=True
+        )
+        
+        if "error" not in structured_data:
+            # Processar dados numéricos
+            structured_data["followers_count"] = _convert_to_int(structured_data.get("followers"))
+            structured_data["following_count"] = _convert_to_int(structured_data.get("following"))
+            structured_data["posts_count"] = _convert_to_int(structured_data.get("posts"))
+            
+            # Adicionar URL original
+            structured_data["profile_url"] = normalized_url
+            structured_data["success"] = True
+            return structured_data
+        else:
+            logger.error(f"Erro na extração estruturada com Firecrawl V2: {structured_data.get('error')}")
+            result_data["error"] = structured_data.get("error")
+    except Exception as firecrawl_error:
+        logger.error(f"Erro no Firecrawl: {str(firecrawl_error)}")
+        result_data["error"] = f"Erro no Firecrawl: {str(firecrawl_error)}"
+            
+    # Se ambos falharem, tentar com Crawl4AI como último recurso
+    try:
+        from crawl4ai import AsyncWebCrawler
+        
+        async with AsyncWebCrawler(verbose=False) as crawler:
+            result = await crawler.arun(
+                url=normalized_url,
+                word_count_threshold=10,
+                bypass_cache=True,
+                wait_for="css:.x9f619.x1n2onr6",  # Seletor comum em perfis do Instagram
+                delay_before_return_html=5.0,
+                page_timeout=45000,
+                js_code=[
+                    "window.scrollTo(0, document.body.scrollHeight/3);",
+                    "await new Promise(resolve => setTimeout(resolve, 2000));",
+                    "window.scrollTo(0, document.body.scrollHeight/2);",
+                    "await new Promise(resolve => setTimeout(resolve, 2000));"
+                ]
+            )
+            
+            if result.success and result.html:
+                html_content = result.html
+                
+                # Extrair dados estruturados usando Firecrawl com DeepSeek como LLM
+                structured_data = firecrawl_client.extract_structured_data_from_html(html_content, instagram_schema)
                 
                 if "error" not in structured_data:
                     # Processar dados numéricos
@@ -236,81 +390,23 @@ async def _scrape_instagram_internal(request: InstagramScrapeRequest, req: Reque
                     
                     # Adicionar URL original
                     structured_data["profile_url"] = normalized_url
+                    structured_data["success"] = True
                     return structured_data
                 else:
-                    logger.error(f"Erro na extração estruturada com Firecrawl V2: {structured_data.get('error')}")
-                    result_data["error"] = structured_data.get("error")
-                    
-                    # Tentar com scrape_url + extract_structured_data_from_html como fallback
-                    try:
-                        html_content = firecrawl_client.scrape_url(normalized_url)
-                        
-                        if html_content and isinstance(html_content, str) and html_content.strip():
-                            # Extrair dados estruturados do HTML
-                            html_structured_data = firecrawl_client.extract_structured_data_from_html(html_content, instagram_schema, use_deepseek=True)
-                            
-                            if "error" not in html_structured_data:
-                                # Processar dados numéricos
-                                html_structured_data["followers_count"] = _convert_to_int(html_structured_data.get("followers"))
-                                html_structured_data["following_count"] = _convert_to_int(html_structured_data.get("following"))
-                                html_structured_data["posts_count"] = _convert_to_int(html_structured_data.get("posts"))
-                                
-                                # Adicionar URL original
-                                html_structured_data["profile_url"] = normalized_url
-                                return html_structured_data
-                        else:
-                            logger.error("Falha ao extrair HTML com Firecrawl")
-                    except Exception as html_extract_error:
-                        logger.error(f"Erro no fallback de extração HTML: {str(html_extract_error)}")
-            except Exception as firecrawl_error:
-                logger.error(f"Erro no Firecrawl: {str(firecrawl_error)}")
-                result_data["error"] = f"Erro no Firecrawl: {str(firecrawl_error)}"
-            
-            # Se ambos falharem, tentar com Hyperbrowser como último recurso
-            try:
-                # Usar o serviço especializado de scraping do Instagram
-                instagram_data = await instagram_scraper.scrape_profile(normalized_url)
-                
-                if instagram_data and "error" not in instagram_data:
-                    # Processar dados numéricos
-                    instagram_data["followers_count"] = _convert_to_int(instagram_data.get("followers"))
-                    instagram_data["following_count"] = _convert_to_int(instagram_data.get("following"))
-                    instagram_data["posts_count"] = _convert_to_int(instagram_data.get("posts"))
-                    
-                    # Adicionar URL original
-                    instagram_data["profile_url"] = normalized_url
-                    return instagram_data
-                else:
-                    logger.error(f"Erro no scraper especializado do Instagram: {instagram_data.get('error')}")
-                    result_data["error"] = instagram_data.get("error")
-            except Exception as instagram_scraper_error:
-                logger.error(f"Erro no scraper especializado do Instagram: {str(instagram_scraper_error)}")
-                result_data["error"] = f"Erro no scraper especializado do Instagram: {str(instagram_scraper_error)}"
-             
-             # Retornar os dados coletados até agora, mesmo que incompletos
-            return result_data
-        except Exception as e:
-                logger.error(f"Erro geral na extração de dados do Instagram: {str(e)}")
-                result_data["error"] = f"Erro geral na extração de dados do Instagram: {str(e)}"
-                return result_data
-    except Exception as outer_e:
-        logger.error(f"Erro crítico na rota de Instagram: {str(outer_e)}")
-        return {
-                    "username": None,
-                    "name": None,
-                    "bio": None,
-                    "posts_count": None,
-                    "followers": None,
-                    "following": None,
-                    "email": None,
-                    "phone": None,
-                    "website": None,
-                    "location": None,
-                    "business_category": None,
-                    "profile_url": url,
-                    "error": f"Erro crítico na rota de Instagram: {str(outer_e)}"
-                }
-                # Fim da implementação
+                    logger.error(f"Erro na extração estruturada com Crawl4AI+Firecrawl: {structured_data['error']}")
+                    result_data["error"] = structured_data["error"]
+            else:
+                logger.error("Falha ao extrair HTML com Crawl4AI")
+                result_data["error"] = "Falha ao extrair HTML com Crawl4AI"
+    except Exception as crawl4ai_error:
+        logger.error(f"Erro no Crawl4AI: {str(crawl4ai_error)}")
+        result_data["error"] = f"Erro no Crawl4AI: {str(crawl4ai_error)}"
+    
+    # Retornar os dados coletados até agora, mesmo que incompletos
+    result_data["success"] = False
+    return result_data
+
+# Fim da implementação do Instagram
 
 @router.post("/linkedin", response_model=Dict[str, Any])
 async def scrape_linkedin(request: LinkedInScrapeRequest, req: Request, response: Response, auth_data: dict = Depends(require_credits)):
