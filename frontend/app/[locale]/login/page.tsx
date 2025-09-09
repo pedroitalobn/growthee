@@ -11,6 +11,8 @@ import { Label } from '@/components/ui/label'
 import { useMutation } from '@tanstack/react-query'
 import { apiClient, authApi } from '@/lib/api/client'
 import { useTranslations } from 'next-intl'
+import { LanguageSwitcher } from '@/components/ui/language-switcher'
+import Image from 'next/image'
 
 export default function LoginPage() {
   const t = useTranslations('login');
@@ -60,8 +62,20 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-background">
+      <div className="absolute top-4 right-4">
+        <LanguageSwitcher />
+      </div>
       <Card className="w-full max-w-sm mx-auto">
-        <CardHeader className="space-y-1">
+        <CardHeader className="space-y-4">
+          <div className="flex justify-center mb-4">
+            <Image
+              src="/images/Growthee-marca.png"
+              alt="Growthee"
+              width={120}
+              height={40}
+              className="object-contain"
+            />
+          </div>
           <CardTitle className="text-2xl font-bold text-center">{t('welcome')}</CardTitle>
           <CardDescription className="text-center">{t('loginDescription')}</CardDescription>
         </CardHeader>

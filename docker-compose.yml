@@ -2,7 +2,7 @@ services:
   postgres:
     image: postgres:15-alpine
     environment:
-      POSTGRES_DB: enrichstory
+      POSTGRES_DB: growthee
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
     ports:
@@ -22,7 +22,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://postgres:password@postgres:5432/enrichstory
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/growthee
       - REDIS_URL=redis://redis:6379
       - BRAVE_API_KEY=${BRAVE_API_KEY}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}

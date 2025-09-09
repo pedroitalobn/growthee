@@ -18,7 +18,19 @@
     "error": "Error",
     "success": "Success",
     "warning": "Warning",
-    "info": "Information"
+    "info": "Information",
+    "email": "Email",
+    "required": "Required",
+    "optional": "Optional",
+    "requestBody": "Request Body (JSON)",
+    "errorUpdatingPlan": "Error updating plan",
+    "subscriptionCanceledSuccess": "Subscription canceled successfully!",
+    "planUpdatedSuccess": "Plan updated successfully!",
+    "testExecutedSuccess": "Test executed successfully!",
+    "apiTestError": "API test error",
+    "testExecutionError": "Error executing test",
+    "invalidHeadersFormat": "Headers must be in valid JSON format",
+    "invalidBodyFormat": "Request body must be in valid JSON format"
   },
   "navigation": {
     "dashboard": "Dashboard",
@@ -46,7 +58,45 @@
     "loginTitle": "Sign in to your account",
     "signupTitle": "Create your account",
     "loginSubtitle": "Enter your credentials to access the dashboard",
-    "signupSubtitle": "Fill in the details below to create your account"
+    "signupSubtitle": "Fill in the details below to create your account",
+    "welcome": "Welcome",
+    "loginDescription": "Sign in to your account to continue",
+    "emailOrUsername": "Email or Username",
+    "passwordPlaceholder": "Enter your password",
+    "createAccount": "Create Account",
+    "signupDescription": "Fill in your details to get started. After registration, you will be directed to choose a plan.",
+    "passwordRequirements": "Password must be at least 8 characters long, including uppercase, lowercase and numbers"
+  },
+  "login": {
+    "welcome": "Welcome",
+    "loginDescription": "Sign in to your account to continue",
+    "emailOrUsername": "Email or Username",
+    "emailOrUsernamePlaceholder": "Enter your email or username",
+    "password": "Password",
+    "passwordPlaceholder": "Enter your password",
+    "login": "Login",
+    "loggingIn": "Logging in...",
+    "loginError": "Login error",
+    "noAccount": "Don't have an account?",
+    "signUp": "Sign up"
+  },
+  "signup": {
+    "createAccount": "Create Account",
+    "signupDescription": "Fill in your details to get started",
+    "email": "Email",
+    "fullName": "Full Name",
+    "companyName": "Company Name (optional)",
+    "password": "Password",
+    "confirmPassword": "Confirm Password",
+    "passwordRequirements": "Password must be at least 8 characters long, including uppercase, lowercase and numbers",
+    "continueToPlan": "Continue to Plans",
+    "alreadyHaveAccount": "Already have an account?",
+    "login": "Login",
+    "passwordMinLength": "Password must be at least 8 characters long",
+    "passwordUppercase": "Password must contain at least one uppercase letter",
+    "passwordLowercase": "Password must contain at least one lowercase letter",
+    "passwordNumber": "Password must contain at least one number",
+    "passwordsDoNotMatch": "Passwords do not match"
   },
   "dashboard": {
     "title": "Dashboard",
@@ -299,5 +349,12 @@
     "createdAt": "Created at",
     "uses": "Uses",
     "lastUsed": "Last used"
+  },
+  "apiDocumentation": {
+    "details": "Details",
+    "test": "Test",
+    "examples": "Examples",
+    "curl": "cURL",
+    "response": "Response"
   }
 }

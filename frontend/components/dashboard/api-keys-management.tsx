@@ -13,7 +13,7 @@ import { ApiKeysSkeleton } from '@/components/ui/loading'
 import { apiClient } from '@/lib/api/client'
 import { Key, Copy, Trash2, Plus, Eye, EyeOff } from 'lucide-react'
 import { format } from 'date-fns'
-import { ptBR } from 'date-fns/locale'
+import { useLocaleForDateFns } from '@/lib/hooks/use-locale'
 
 interface ApiKey {
   id: string
@@ -44,6 +44,7 @@ const apiKeysApi = {
 
 export function ApiKeysManagement() {
   const t = useTranslations('apiKeys')
+  const locale = useLocaleForDateFns()
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newKeyName, setNewKeyName] = useState('')
   const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set())
@@ -222,10 +223,10 @@ export function ApiKeysManagement() {
                 </div>
                 
                 <div className="flex justify-between text-sm text-muted-foreground">
-                  <span>{t('createdAt')}: {format(new Date(apiKey.createdAt), 'dd/MM/yyyy HH:mm', { locale: ptBR })}</span>
+                  <span>{t('createdAt')}: {format(new Date(apiKey.createdAt), 'dd/MM/yyyy HH:mm', { locale })}</span>
                   <span>{t('uses')}: {apiKey.usageCount}</span>
                   {apiKey.lastUsed && (
-                    <span>{t('lastUsed')}: {format(new Date(apiKey.lastUsed), 'dd/MM/yyyy HH:mm', { locale: ptBR })}</span>
+                    <span>{t('lastUsed')}: {format(new Date(apiKey.lastUsed), 'dd/MM/yyyy HH:mm', { locale })}</span>
                   )}
                 </div>
               </div>

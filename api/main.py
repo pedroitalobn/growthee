@@ -59,12 +59,12 @@ person_enrichment_service = PersonEnrichmentService()
 async def startup():
     await prisma.connect()
     set_prisma_instance(prisma)
-    logger.info("Prisma connected successfully")
+    logger.info("Server started with Prisma connection")
 
 @app.on_event("shutdown")
 async def shutdown():
     await prisma.disconnect()
-    logger.info("Prisma disconnected")
+    logger.info("Server shutdown")
 
 @app.get("/health")
 async def health_check():

@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
+import { useCurrentLocale } from '@/lib/hooks/use-locale'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useAuthStore } from '@/lib/store/auth-store'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -70,6 +71,8 @@ interface PaymentMethod {
 
 export function BillingManagement() {
   const t = useTranslations('billing')
+  const tCommon = useTranslations('common')
+  const currentLocale = useCurrentLocale()
   const { user } = useAuthStore()
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null)
   
@@ -181,11 +184,11 @@ export function BillingManagement() {
       return { success: true, planId }
     },
     onSuccess: () => {
-      console.log('Plano atualizado com sucesso!')
+      console.log(tCommon('planUpdatedSuccess'))
       setSelectedPlan(null)
     },
     onError: () => {
-      console.error('Erro ao atualizar plano')
+      console.error(tCommon('errorUpdatingPlan'))
     }
   })
 
@@ -195,7 +198,7 @@ export function BillingManagement() {
       return { success: true }
     },
     onSuccess: () => {
-      console.log('Assinatura cancelada com sucesso!')
+      console.log(tCommon('subscriptionCanceledSuccess'))
     }
   })
 
@@ -204,7 +207,12 @@ export function BillingManagement() {
   const creditsUsagePercent = currentPlan ? (creditsUsed / currentPlan.credits) * 100 : 0
 
   const formatDate = (date: Date) => {
-    return new Intl.DateTimeFormat('pt-BR', {
+    const localeMap: Record<string, string> = {
+      pt: 'pt-BR',
+      en: 'en-US',
+      es: 'es-ES'
+    }
+    return new Intl.DateTimeFormat(localeMap[currentLocale] || 'en-US', {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric'

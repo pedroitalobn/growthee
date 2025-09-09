@@ -55,6 +55,7 @@ const HTTP_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
 
 export function ApiTester() {
   const t = useTranslations('apiTester')
+  const tCommon = useTranslations('common')
   const { user, token } = useAuthStore()
   const [selectedEndpoint, setSelectedEndpoint] = useState<ApiEndpoint | null>(null)
   const [customRequest, setCustomRequest] = useState({
@@ -340,7 +341,7 @@ export function ApiTester() {
       const headersText = customRequest.headers.trim() || '{}'
       parsedHeaders = JSON.parse(headersText)
     } catch (error) {
-      alert('Headers devem estar em formato JSON válido')
+      alert(tCommon('invalidHeadersFormat'))
       return
     }
 
@@ -349,7 +350,7 @@ export function ApiTester() {
       try {
         JSON.parse(customRequest.body)
       } catch (error) {
-        alert('Corpo da requisição deve estar em formato JSON válido')
+        alert(tCommon('invalidBodyFormat'))
         return
       }
     }

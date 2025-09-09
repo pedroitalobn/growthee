@@ -10,7 +10,7 @@ import { apiClient } from '@/lib/api/client'
 import { useAuthStore } from '@/lib/store/auth-store'
 import { CreditCard, TrendingDown, TrendingUp, Calendar, Activity } from 'lucide-react'
 import { format } from 'date-fns'
-import { ptBR } from 'date-fns/locale'
+import { useLocaleForDateFns } from '@/lib/hooks/use-locale'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts'
 import { useTranslations } from 'next-intl'
 
@@ -57,7 +57,8 @@ const creditsApi = {
 }
 
 export function CreditsHistory() {
-  const t = useTranslations('creditsHistory');
+  const t = useTranslations('creditsHistory')
+  const locale = useLocaleForDateFns();
   const { user } = useAuthStore()
   
   const { data: creditHistory = [], isLoading: historyLoading } = useQuery({
@@ -197,11 +198,11 @@ export function CreditsHistory() {
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis 
                   dataKey="date" 
-                  tickFormatter={(value) => format(new Date(value), 'dd/MM', { locale: ptBR })}
+                  tickFormatter={(value) => format(new Date(value), 'dd/MM', { locale })}
                 />
                 <YAxis />
                 <Tooltip 
-                  labelFormatter={(value) => format(new Date(value), 'dd/MM/yyyy', { locale: ptBR })}
+                  labelFormatter={(value) => format(new Date(value), 'dd/MM/yyyy', { locale })}
                   formatter={(value, name) => [
                     value,
                     name === 'credits' ? t('credits') : t('requests')
@@ -299,7 +300,7 @@ export function CreditsHistory() {
                         <Badge variant="outline">
                           {getTransactionLabel(transaction.type)}
                         </Badge>
-                        <span>{format(new Date(transaction.createdAt), 'dd/MM/yyyy HH:mm', { locale: ptBR })}</span>
+                        <span>{format(new Date(transaction.createdAt), 'dd/MM/yyyy HH:mm', { locale })}</span>
                         {transaction.metadata?.endpoint && (
                           <span>• {transaction.metadata.endpoint}</span>
                         )}

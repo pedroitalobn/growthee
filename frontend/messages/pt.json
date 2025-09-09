@@ -19,6 +19,18 @@
     "success": "Sucesso",
     "warning": "Aviso",
     "info": "Informação",
+    "email": "E-mail",
+    "required": "Obrigatório",
+     "optional": "Opcional",
+     "requestBody": "Corpo da Requisição (JSON)",
+    "errorUpdatingPlan": "Erro ao atualizar plano",
+    "subscriptionCanceledSuccess": "Assinatura cancelada com sucesso!",
+    "planUpdatedSuccess": "Plano atualizado com sucesso!",
+    "testExecutedSuccess": "Teste executado com sucesso!",
+    "apiTestError": "Erro no teste da API",
+    "testExecutionError": "Erro ao executar teste",
+    "invalidHeadersFormat": "Headers devem estar em formato JSON válido",
+    "invalidBodyFormat": "Corpo da requisição deve estar em formato JSON válido",
     "redirecting": "Redirecionando...",
     "back": "Voltar",
     "next": "Próximo",
@@ -190,6 +202,13 @@
     "whatsappUrl": "URL do WhatsApp",
     "whatsappSearch": "Busca WhatsApp",
     "whatsappSearchDescription": "Buscar negócios no WhatsApp"
+  },
+  "apiDocumentation": {
+    "details": "Detalhes",
+    "test": "Testar",
+    "examples": "Exemplos",
+    "curl": "cURL",
+    "response": "Resposta"
   },
   "usageChart": {
     "credits": "Créditos",

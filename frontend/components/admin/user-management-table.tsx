@@ -13,7 +13,7 @@ export function UserManagementTable({ users = [] }: UserManagementTableProps) {
   const tCommon = useTranslations('common')
   
   const columns = [
-    { key: 'email', header: 'Email' },
+    { key: 'email', header: tCommon('email') },
     { key: 'plan', header: t('plan') },
     { key: 'creditsRemaining', header: t('credits') },
     { key: 'isActive', header: tCommon('status') },

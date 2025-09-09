@@ -7,6 +7,7 @@ import { ThemeToggle } from './theme-toggle'
 import { LanguageSwitcher } from './language-switcher'
 import { useAuthStore } from '@/lib/store/auth-store'
 import { Home, Users, CreditCard, Settings, User, Key, FileText, BarChart3, LogOut } from 'lucide-react'
+import Image from 'next/image'
 
 export function Sidebar() {
   const pathname = usePathname()
@@ -82,8 +83,14 @@ export function Sidebar() {
 
   return (
     <div className="flex h-full w-64 flex-col border-r bg-card fade-in">
-      <div className="flex h-14 items-center border-b px-4">
-        <h2 className="text-lg font-semibold">{t('appName')}</h2>
+      <div className="flex h-16 items-center justify-center border-b px-4">
+        <Image
+          src="/images/Growthee-marca.png"
+          alt="Growthee"
+          width={100}
+          height={32}
+          className="object-contain"
+        />
       </div>
       <div className="flex flex-1 flex-col gap-1 p-4">
         {navigation.map((item) => {

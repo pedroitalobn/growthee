@@ -87,7 +87,9 @@ const docsApi = {
 }
 
 export function ApiDocumentation() {
-  const t = useTranslations('apiDocs')
+  const t = useTranslations('apiTester')
+  const tDoc = useTranslations('apiDocumentation')
+  const tCommon = useTranslations('common')
   const { user } = useAuthStore()
   const [selectedEndpoint, setSelectedEndpoint] = useState<ApiEndpoint | null>(null)
   const [testParams, setTestParams] = useState<Record<string, any>>({})
@@ -107,13 +109,13 @@ export function ApiDocumentation() {
     onSuccess: (result) => {
       setTestResult(result)
       if (result.success) {
-        toast.success('Teste executado com sucesso!')
+        toast.success(tCommon('testExecutedSuccess'))
       } else {
-        toast.error('Erro no teste da API')
+        toast.error(tCommon('apiTestError'))
       }
     },
     onError: () => {
-      toast.error('Erro ao executar teste')
+      toast.error(tCommon('testExecutionError'))
     }
   })
 
@@ -304,7 +306,7 @@ export function ApiDocumentation() {
                       }`}
                       onClick={() => setActiveTab('details')}
                     >
-                      Detalhes
+                      {tDoc('details')}
                     </button>
                     <button
                       className={`px-4 py-2 border-b-2 transition-all duration-200 ease-out hover:bg-accent/20 ${
@@ -314,7 +316,7 @@ export function ApiDocumentation() {
                       }`}
                       onClick={() => setActiveTab('test')}
                     >
-                      Testar
+                      {tDoc('test')}
                     </button>
                     <button
                       className={`px-4 py-2 border-b-2 transition-all duration-200 ease-out hover:bg-accent/20 ${
@@ -324,7 +326,7 @@ export function ApiDocumentation() {
                       }`}
                       onClick={() => setActiveTab('examples')}
                     >
-                      Exemplos
+                      {tDoc('examples')}
                     </button>
                     <button
                       className={`px-4 py-2 border-b-2 transition-all duration-200 ease-out hover:bg-accent/20 ${
@@ -334,7 +336,7 @@ export function ApiDocumentation() {
                       }`}
                       onClick={() => setActiveTab('curl')}
                     >
-                      cURL
+                      {tDoc('curl')}
                     </button>
                   </div>
 
@@ -352,7 +354,7 @@ export function ApiDocumentation() {
                                       {param.name}
                                     </code>
                                     <Badge variant={param.required ? 'destructive' : 'secondary'}>
-                                      {param.required ? 'Obrigatório' : 'Opcional'}
+                                      {param.required ? tCommon('required') : tCommon('optional')}
                                     </Badge>
                                     <span className="text-xs text-muted-foreground">
                                       {param.type}
@@ -445,7 +447,7 @@ export function ApiDocumentation() {
 
                         {selectedEndpoint.requestBody && (
                           <div>
-                            <Label htmlFor="testBody">Corpo da Requisição (JSON)</Label>
+                            <Label htmlFor="testBody">{tCommon('requestBody')}</Label>
                             <Textarea
                               id="testBody"
                               placeholder={JSON.stringify(selectedEndpoint.requestBody.example, null, 2)}
@@ -527,7 +529,7 @@ export function ApiDocumentation() {
                         {selectedEndpoint.responses.map(response => (
                           <div key={response.status}>
                             <div className="flex items-center gap-2 mb-2">
-                              <h4 className="font-medium">Resposta {response.status}</h4>
+                              <h4 className="font-medium">{tDoc('response')} {response.status}</h4>
                               <Badge variant={response.status < 300 ? 'default' : 'destructive'}>
                                 {response.description}
                               </Badge>

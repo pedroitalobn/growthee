@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { format } from 'date-fns'
-import { ptBR } from 'date-fns/locale'
+import { useLocaleForDateFns } from '@/lib/hooks/use-locale'
 
 interface UsageChartProps {
   data?: any[]
@@ -19,6 +19,7 @@ interface ChartDataPoint {
 
 export default function UsageChart({ data = [] }: UsageChartProps) {
   const t = useTranslations('dashboard');
+  const locale = useLocaleForDateFns()
   
   // Processar dados para o gráfico
   const processChartData = (): ChartDataPoint[] => {
@@ -69,7 +70,7 @@ export default function UsageChart({ data = [] }: UsageChartProps) {
           dataKey="date" 
           tickFormatter={(value) => {
             try {
-              return format(new Date(value), 'dd/MM', { locale: ptBR })
+              return format(new Date(value), 'dd/MM', { locale })
             } catch {
               return value
             }
@@ -80,7 +81,7 @@ export default function UsageChart({ data = [] }: UsageChartProps) {
         <Tooltip 
           labelFormatter={(value) => {
             try {
-              return format(new Date(value), 'dd/MM/yyyy', { locale: ptBR })
+              return format(new Date(value), 'dd/MM/yyyy', { locale })
             } catch {
               return value
             }
