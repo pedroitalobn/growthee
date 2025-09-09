@@ -106,7 +106,7 @@ export default function BillingPage() {
                 <span className="text-3xl font-bold">
                   ${plan.priceMonthly}
                 </span>
-                <span className="text-muted-foreground">/mês</span>
+                <span className="text-muted-foreground">/{t('month')}</span>
               </CardDescription>
             </CardHeader>
             
@@ -114,7 +114,7 @@ export default function BillingPage() {
               <div className="space-y-4">
                 <div className="text-center">
                   <p className="text-lg font-semibold">
-                    {plan.creditsIncluded.toLocaleString()} créditos/mês
+                    {plan.creditsIncluded.toLocaleString()} {t('credits')}/{t('month')}
                   </p>
                 </div>
                 
@@ -133,9 +133,9 @@ export default function BillingPage() {
                   disabled={user?.plan === plan.type || loading === plan.id}
                   onClick={() => handleUpgrade(plan.id)}
                 >
-                  {loading === plan.id ? 'Processando...' : 
-                   user?.plan === plan.type ? 'Plano Atual' : 
-                   plan.type === 'FREE' ? 'Gratuito' : 'Fazer Upgrade'}
+                  {loading === plan.id ? t('processing') : 
+                   user?.plan === plan.type ? t('currentPlanText') : 
+                   plan.type === 'FREE' ? t('freeText') : t('upgradeText')}
                 </Button>
               </div>
             </CardContent>

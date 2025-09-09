@@ -31,6 +31,7 @@ export function middleware(request: NextRequest) {
   const isPublicPage = ['/login', '/signup'].includes(basePathname)
   const isHomePage = basePathname === '/'
   const isDashboardPage = basePathname.startsWith('/dashboard')
+  const isAdminPage = basePathname.startsWith('/admin')
 
   // Verifica se tem token válido
   let hasValidToken = false
@@ -43,18 +44,35 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  // Se não tem token válido e está tentando acessar dashboard, redireciona para login
-  if (!hasValidToken && isDashboardPage) {
+  // Se não tem token válido e está tentando acessar dashboard ou admin, redireciona para login
+  if (!hasValidToken && (isDashboardPage || isAdminPage)) {
     const locale = pathname.split('/')[1]
     const validLocale = locales.includes(locale as any) ? locale : defaultLocale
     return NextResponse.redirect(new URL(`/${validLocale}/login`, request.url))
   }
 
-  // Se tem token válido e está em página de auth, redireciona para dashboard
+  // Se tem token válido e está em página de auth, redireciona baseado no role
   if (hasValidToken && isPublicPage) {
     const locale = pathname.split('/')[1]
     const validLocale = locales.includes(locale as any) ? locale : defaultLocale
-    return NextResponse.redirect(new URL(`/${validLocale}/dashboard`, request.url))
+    
+    // Verificar role do usuário para redirecionamento
+    if (authCookie?.value) {
+      try {
+        const authData = JSON.parse(authCookie.value)
+        const userRole = authData?.state?.user?.role
+        
+        if (userRole === 'SUPER_ADMIN') {
+          return NextResponse.redirect(new URL(`/${validLocale}/admin`, request.url))
+        } else {
+          return NextResponse.redirect(new URL(`/${validLocale}/dashboard`, request.url))
+        }
+      } catch {
+        return NextResponse.redirect(new URL(`/${validLocale}/dashboard`, request.url))
+      }
+    } else {
+      return NextResponse.redirect(new URL(`/${validLocale}/dashboard`, request.url))
+    }
   }
 
   // Continue with the request

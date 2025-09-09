@@ -234,7 +234,7 @@ export default function DashboardPage() {
       case 'api-keys': return tNav('apiKeys')
       case 'credits': return tNav('credits')
       case 'documentation': return tNav('documentation')
-      case 'tester': return 'Playground'
+      case 'tester': return tNav('playground')
       case 'billing': return tNav('billing')
       default: return tNav('dashboard')
     }

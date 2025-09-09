@@ -41,10 +41,10 @@ interface Subscription {
   id: string
   planId: string
   status: 'active' | 'canceled' | 'past_due' | 'trialing'
-  currentPeriodStart: Date
-  currentPeriodEnd: Date
+  currentPeriodStart: Date | string
+  currentPeriodEnd: Date | string
   cancelAtPeriodEnd: boolean
-  trialEnd?: Date
+  trialEnd?: Date | string
 }
 
 interface Invoice {
@@ -53,7 +53,7 @@ interface Invoice {
   status: 'paid' | 'pending' | 'failed'
   amount: number
   currency: string
-  date: Date
+  date: Date | string
   downloadUrl?: string
 }
 
@@ -206,17 +206,26 @@ export function BillingManagement() {
   const creditsUsed = user?.creditsTotal ? user.creditsTotal - (user.creditsRemaining || 0) : 0
   const creditsUsagePercent = currentPlan ? (creditsUsed / currentPlan.credits) * 100 : 0
 
-  const formatDate = (date: Date) => {
+  const formatDate = (date: Date | string) => {
     const localeMap: Record<string, string> = {
       pt: 'pt-BR',
       en: 'en-US',
       es: 'es-ES'
     }
+    
+    // Convert string to Date if needed
+    const dateObj = typeof date === 'string' ? new Date(date) : date
+    
+    // Check if date is valid
+    if (!dateObj || isNaN(dateObj.getTime())) {
+      return 'N/A'
+    }
+    
     return new Intl.DateTimeFormat(localeMap[currentLocale] || 'en-US', {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric'
-    }).format(date)
+    }).format(dateObj)
   }
 
   const getStatusBadge = (status: string) => {

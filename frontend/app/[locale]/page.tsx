@@ -14,8 +14,12 @@ export default function HomePage() {
 
   useEffect(() => {
     if (isAuthenticated && user) {
-      // Se o usuário está autenticado, redireciona para o dashboard
-      router.push(`/${locale}/dashboard`)
+      // Redireciona baseado no role do usuário
+      if (user.role === 'SUPER_ADMIN') {
+        router.push(`/${locale}/admin`)
+      } else {
+        router.push(`/${locale}/dashboard`)
+      }
     } else {
       // Se não está autenticado, redireciona para o login
       router.push(`/${locale}/login`)
