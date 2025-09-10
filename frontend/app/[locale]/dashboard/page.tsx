@@ -19,8 +19,9 @@ import { CreditsHistory } from '@/components/dashboard/credits-history'
 import { ApiDocumentation } from '@/components/dashboard/api-documentation'
 import { ApiTester } from '@/components/dashboard/api-tester'
 import { BillingManagement } from '@/components/dashboard/billing-management'
+import { ChatInterface } from '@/components/dashboard/chat-interface'
 
-type DashboardTab = 'overview' | 'profile' | 'api-keys' | 'credits' | 'documentation' | 'tester' | 'billing'
+type DashboardTab = 'overview' | 'profile' | 'api-keys' | 'credits' | 'documentation' | 'tester' | 'billing' | 'chat'
 
 export default function DashboardPage() {
   const { user } = useAuthStore()
@@ -34,7 +35,7 @@ export default function DashboardPage() {
   
   useEffect(() => {
     const tab = searchParams.get('tab') as DashboardTab
-    if (tab && ['overview', 'profile', 'api-keys', 'credits', 'documentation', 'tester', 'billing'].includes(tab)) {
+    if (tab && ['overview', 'profile', 'api-keys', 'credits', 'documentation', 'tester', 'billing', 'chat'].includes(tab)) {
       setActiveTab(tab)
     }
   }, [searchParams])
@@ -65,6 +66,8 @@ export default function DashboardPage() {
         return <ApiTester />
       case 'billing':
         return <BillingManagement />
+      case 'chat':
+        return <ChatInterface />
       default:
         return (
           <div className="space-y-4">
@@ -236,15 +239,58 @@ export default function DashboardPage() {
       case 'documentation': return tNav('documentation')
       case 'tester': return tNav('playground')
       case 'billing': return tNav('billing')
+      case 'chat': return '' // Remove title for chat
       default: return tNav('dashboard')
     }
   }
 
   return (
-    <div className="flex-1 space-y-4 p-8 pt-6">
-      <div className="flex items-center justify-between space-y-2">
-        <h2 className="text-3xl font-bold tracking-tight">{getPageTitle()}</h2>
-      </div>
+    <div className="flex-1 space-y-4 p-8 pt-6 min-h-screen">
+      {/* Only show title and navigation for non-chat tabs */}
+      {activeTab !== 'chat' && (
+        <>
+          <div className="flex items-center justify-between space-y-2">
+            <h2 className="text-3xl font-bold tracking-tight">{getPageTitle()}</h2>
+          </div>
+          
+          {/* Navigation Tabs */}
+          <div className="mb-6">
+            <div className="flex space-x-1 rounded-lg bg-accent p-1">
+              {[
+                { id: 'overview', name: t('overview'), icon: BarChart3 },
+                { id: 'profile', name: tNav('profile'), icon: User },
+                { id: 'api-keys', name: tNav('apiKeys'), icon: Key },
+                { id: 'credits', name: tNav('credits'), icon: CreditCard },
+                { id: 'documentation', name: tNav('documentation'), icon: FileText },
+                { id: 'tester', name: tNav('playground'), icon: TrendingUp },
+                { id: 'billing', name: tNav('billing'), icon: Building },
+                { id: 'chat', name: 'Chat', icon: Users }
+              ].map((tab) => {
+                const Icon = tab.icon
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => {
+                      setActiveTab(tab.id as DashboardTab)
+                      const params = new URLSearchParams(searchParams.toString())
+                      params.set('tab', tab.id)
+                      router.push(`${pathname}?${params.toString()}`)
+                    }}
+                    className={`flex items-center space-x-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                      activeTab === tab.id
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-background'
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                    <span>{tab.name}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        </>
+      )}
       
       {/* Content */}
       {renderTabContent()}

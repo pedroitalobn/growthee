@@ -16,6 +16,8 @@ from api.routes.profile import router as profile_router
 from api.routes.credits import router as credits_router
 from api.routes.docs import router as docs_router
 from api.routes.auth_credits import router as auth_credits_router
+from api.routes.admin import router as admin_router
+from api.routes.billing import router as billing_router
 from .middleware import require_credits, credit_middleware
 from prisma import Prisma
 from .database import set_prisma_instance, get_db
@@ -597,6 +599,8 @@ app.include_router(dashboard_router)
 app.include_router(profile_router)
 app.include_router(credits_router)
 app.include_router(auth_credits_router)
+app.include_router(admin_router, prefix="/api/v1")
+app.include_router(billing_router)
 app.include_router(docs_router)
 
 

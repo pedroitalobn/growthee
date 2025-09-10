@@ -16,7 +16,7 @@ export function Loading({ size = 'md', className, text }: LoadingProps) {
   }
 
   return (
-    <div className={cn('loading-container fade-in p-4', className)}>
+    <div className={cn('loading-container p-4', className)}>
       <div className="flex flex-col items-center justify-center space-y-4">
         <div
           className={cn(
@@ -34,7 +34,7 @@ export function Loading({ size = 'md', className, text }: LoadingProps) {
 
 export function LoadingPage() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background fade-in p-8">
+    <div className="min-h-screen flex items-center justify-center bg-background p-8">
       <Loading size="lg" text="Carregando..." className="p-8" />
     </div>
   )
@@ -42,7 +42,7 @@ export function LoadingPage() {
 
 export function LoadingSkeleton({ className }: { className?: string }) {
   return (
-    <div className={cn('loading-skeleton smooth-fade bg-muted rounded transition-all duration-1000 ease-out', className)} />
+    <div className={cn('loading-skeleton bg-muted rounded transition-all duration-1000 ease-out', className)} />
   )
 }
 

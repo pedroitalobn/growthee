@@ -52,7 +52,7 @@ export default function UsageChart({ data = [] }: UsageChartProps) {
 
   if (chartData.length === 0) {
     return (
-      <div className="h-64 flex items-center justify-center text-muted-foreground fade-in">
+      <div className="h-64 flex items-center justify-center text-muted-foreground">
         <div className="text-center">
           <p>{t('noDataAvailable')}</p>
               <p className="text-sm mt-2">{t('dataWillAppear')}</p>
@@ -62,7 +62,7 @@ export default function UsageChart({ data = [] }: UsageChartProps) {
   }
 
   return (
-    <div className="chart-container fade-in">
+    <div className="chart-container">
       <ResponsiveContainer width="100%" height={300}>
         <LineChart data={chartData}>
         <CartesianGrid strokeDasharray="3 3" className="opacity-30 transition-opacity duration-300" />

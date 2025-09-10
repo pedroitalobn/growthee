@@ -6,7 +6,7 @@ import { Button } from './button'
 import { ThemeToggle } from './theme-toggle'
 import { LanguageSwitcher } from './language-switcher'
 import { useAuthStore } from '@/lib/store/auth-store'
-import { Home, Users, CreditCard, Settings, User, Key, FileText, BarChart3, LogOut } from 'lucide-react'
+import { Home, Users, CreditCard, Settings, User, Key, FileText, BarChart3, LogOut, MessageSquare } from 'lucide-react'
 import Image from 'next/image'
 
 export function Sidebar() {
@@ -38,6 +38,11 @@ export function Sidebar() {
   const { user, logout } = useAuthStore()
 
   const navigation = [
+    {
+      name: t('chat'),
+      href: `/${locale}/dashboard?tab=chat`,
+      icon: MessageSquare
+    },
     {
       name: t('dashboard'),
       href: `/${locale}/dashboard?tab=overview`,
@@ -82,7 +87,7 @@ export function Sidebar() {
   }
 
   return (
-    <div className="flex h-full w-64 flex-col border-r bg-card fade-in">
+    <div className="flex h-full w-64 flex-col border-r">
       <div className="flex h-16 items-center justify-center border-b px-4">
         <div className="flex items-center justify-center">
           <svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 655.36 76.6" className="h-6 w-auto">
@@ -122,9 +127,14 @@ export function Sidebar() {
             <Link key={item.name} href={item.href}>
               <Button
                 variant={isActive ? 'secondary' : 'ghost'}
-                className="w-full justify-start gap-2 transition-all duration-200 ease-out hover:translate-x-1"
+                className={cn(
+                  "w-full justify-start gap-2",
+                  isActive
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                )}
               >
-                <Icon className="h-4 w-4 transition-transform duration-200 ease-out" />
+                <Icon className="h-4 w-4" />
                 {item.name}
               </Button>
             </Link>
@@ -138,7 +148,7 @@ export function Sidebar() {
         </div>
         <Button
           variant="ghost"
-          className="w-full justify-start gap-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+          className="w-full justify-start gap-2 text-red-400 hover:bg-accent hover:text-red-300"
           onClick={handleLogout}
         >
           <LogOut className="h-4 w-4" />

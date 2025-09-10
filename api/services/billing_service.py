@@ -5,7 +5,12 @@ from prisma import Prisma
 from fastapi import HTTPException, status
 from datetime import datetime, timedelta
 
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+# Configurar Stripe
+stripe_secret_key = os.getenv("STRIPE_SECRET_KEY")
+if stripe_secret_key:
+    stripe.api_key = stripe_secret_key
+else:
+    print("Warning: STRIPE_SECRET_KEY not found in environment variables")
 
 class BillingService:
     def __init__(self, db: Prisma):

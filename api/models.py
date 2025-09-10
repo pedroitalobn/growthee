@@ -205,3 +205,49 @@ class PersonResponse(BaseModel):
     data: Optional[Dict[str, Any]] = None
     message: str = "Person enriched successfully"
     enrich: bool = True
+
+# API Request Tracking Models
+class APIRequestLog(BaseModel):
+    id: Optional[str] = None
+    service_name: str  # brave_browser, firecrawl, deepseek, chatgpt, claude, etc.
+    endpoint: str
+    method: str = "GET"
+    request_data: Optional[Dict[str, Any]] = None
+    response_status: Optional[int] = None
+    response_time_ms: Optional[float] = None
+    tokens_used: Optional[int] = None
+    cost_usd: Optional[float] = None
+    user_id: Optional[str] = None
+    timestamp: str
+    error_message: Optional[str] = None
+    request_size_bytes: Optional[int] = None
+    response_size_bytes: Optional[int] = None
+
+class APIServiceStats(BaseModel):
+    service_name: str
+    total_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    avg_response_time_ms: float = 0.0
+    last_request_timestamp: Optional[str] = None
+    daily_requests: int = 0
+    monthly_requests: int = 0
+
+class APIUsageResponse(BaseModel):
+    services: List[APIServiceStats] = []
+    total_requests_today: int = 0
+    total_cost_today: float = 0.0
+    total_tokens_today: int = 0
+    most_used_service: Optional[str] = None
+    cost_breakdown: Dict[str, float] = {}
+    request_trends: Dict[str, List[int]] = {}  # Last 7 days
+
+class APIAlertConfig(BaseModel):
+    service_name: str
+    max_daily_requests: Optional[int] = None
+    max_daily_cost: Optional[float] = None
+    max_hourly_requests: Optional[int] = None
+    alert_email: Optional[str] = None
+    enabled: bool = True

@@ -65,13 +65,13 @@ export function middleware(request: NextRequest) {
         if (userRole === 'SUPER_ADMIN') {
           return NextResponse.redirect(new URL(`/${validLocale}/admin`, request.url))
         } else {
-          return NextResponse.redirect(new URL(`/${validLocale}/dashboard`, request.url))
+          return NextResponse.redirect(new URL(`/${validLocale}/chat`, request.url))
         }
       } catch {
-        return NextResponse.redirect(new URL(`/${validLocale}/dashboard`, request.url))
+        return NextResponse.redirect(new URL(`/${validLocale}/chat`, request.url))
       }
     } else {
-      return NextResponse.redirect(new URL(`/${validLocale}/dashboard`, request.url))
+      return NextResponse.redirect(new URL(`/${validLocale}/chat`, request.url))
     }
   }
 

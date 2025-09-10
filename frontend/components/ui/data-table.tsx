@@ -10,10 +10,10 @@ const DataTable = React.forwardRef<HTMLDivElement, DataTableProps>(
   ({ className, data = [], columns = [], ...props }, ref) => (
     <div
       ref={ref}
-      className={cn("w-full fade-in", className)}
+      className={cn("w-full", className)}
       {...props}
     >
-      <div className="rounded-md border">
+      <div className="border">
         <table className="w-full">
           <thead>
             <tr className="border-b">

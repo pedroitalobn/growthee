@@ -78,10 +78,25 @@ export function BillingManagement() {
   
   const AVAILABLE_PLANS: Plan[] = [
     {
-      id: 'starter',
+      id: 'cmfczm09z0000i61fl799r0ab',
+      name: 'Free',
+      description: t('freeDescription'),
+      price: 0,
+      currency: 'USD',
+      interval: 'month',
+      credits: 250,
+      features: [
+        t('freeCredits'),
+        t('basicApi'),
+        t('emailSupport'),
+        t('basicDocumentation')
+      ]
+    },
+    {
+      id: 'cmfczm09a0001i61fl799r0ac',
       name: 'Starter',
       description: t('starterDescription'),
-      price: 29,
+      price: 9,
       currency: 'USD',
       interval: 'month',
       credits: 1000,
@@ -93,13 +108,13 @@ export function BillingManagement() {
       ]
     },
     {
-      id: 'professional',
+      id: 'cmfczm09d0002i61ftnoe24ur',
       name: 'Professional',
       description: t('professionalDescription'),
-      price: 99,
+      price: 19,
       currency: 'USD',
       interval: 'month',
-      credits: 5000,
+      credits: 3000,
       features: [
         t('professionalCredits'),
         t('completeApi'),
@@ -111,13 +126,13 @@ export function BillingManagement() {
       popular: true
     },
     {
-      id: 'enterprise',
+      id: 'cmfczm09f0003i61fzxrgosk0',
       name: 'Enterprise',
       description: t('enterpriseDescription'),
-      price: 299,
+      price: 39,
       currency: 'USD',
       interval: 'month',
-      credits: 20000,
+      credits: 5000,
       features: [
         t('enterpriseCredits'),
         t('premiumApi'),
@@ -125,7 +140,8 @@ export function BillingManagement() {
         t('dedicatedSupport'),
         t('guaranteedSla'),
         t('customReports'),
-        t('accountManager')
+        t('accountManager'),
+        t('extraCredits')
       ]
     }
   ]
@@ -179,16 +195,34 @@ export function BillingManagement() {
 
   const upgradeMutation = useMutation({
     mutationFn: async (planId: string) => {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      return { success: true, planId }
+      const response = await fetch('/api/v1/billing/checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ planId })
+      })
+      
+      if (!response.ok) {
+        throw new Error('Failed to create checkout session')
+      }
+      
+      const data = await response.json()
+      
+      // Redirect to Stripe checkout
+      if (data.url) {
+        window.location.href = data.url
+      }
+      
+      return data
     },
     onSuccess: () => {
       console.log(tCommon('planUpdatedSuccess'))
       setSelectedPlan(null)
     },
-    onError: () => {
-      console.error(tCommon('errorUpdatingPlan'))
+    onError: (error) => {
+      console.error(tCommon('errorUpdatingPlan'), error)
     }
   })
 
