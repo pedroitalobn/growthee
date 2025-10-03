@@ -1,0 +1,113 @@
+# Node modules and frontend
+node_modules/
+frontend/
+
+# Git and version control
+.git/
+.gitignore
+
+# Environment files
+.env*
+!.env.example
+
+# Logs and temporary files
+*.log
+logs/
+*.tmp
+*.temp
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Documentation
+*.md
+!README.md
+
+# Results and outputs
+results/
+output/
+
+# SSL certificates
+ssl/
+
+# Trae specific
+.trae/
+
+# Docker files (except the one we're using)
+Dockerfile*
+!Dockerfile.backend.micro
+docker-compose*.yml
+
+# Scripts
+*.sh
+
+# Large files that aren't needed
+*.tar.gz
+*.zip
+*.rar
+
+# Scrapy specific
+scrapy.cfg
+enrichstory/
+schemas/
+tests/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Nginx config
+nginx/
+
+# Package files
+package*.json
+
+# Specific large files
+Growthee-marca.png
+growthee.svg

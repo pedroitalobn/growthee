@@ -1,0 +1,28 @@
+FROM python:3.11-slim
+
+# Criar usuário não-root
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+
+# Definir diretório de trabalho
+WORKDIR /app
+
+# Copiar requirements primeiro para cache de layers
+COPY requirements.txt .
+
+# Instalar dependências Python (sem gcc, usando wheels pré-compilados)
+RUN pip install --no-cache-dir --only-binary=all -r requirements.txt
+
+# Copiar código da aplicação
+COPY . .
+
+# Mudar ownership dos arquivos
+RUN chown -R appuser:appgroup /app
+
+# Mudar para usuário não-root
+USER appuser
+
+# Expor porta
+EXPOSE 8000
+
+# Comando para executar a aplicação
+CMD ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,4 +1,4 @@
-# Build definitivo - sem problemas de hash mismatch
+# Dockerfile simplificado para backend apenas
 FROM python:3.11-bullseye as builder
 
 WORKDIR /app
@@ -10,8 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copiar e instalar dependências
-COPY requirements-prod.txt .
-RUN pip install --no-cache-dir --user -r requirements-prod.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
 
 # Instalar Playwright browsers
 RUN /root/.local/bin/playwright install chromium
@@ -38,12 +38,16 @@ COPY api/ ./api/
 COPY prisma/ ./prisma/
 COPY .env* ./
 
-# Configurar permissões completas para o usuário app
+# Configurar permissões
 RUN mkdir -p logs /home/app/.cache/prisma-python && \
     chown -R app:app /app /home/app
 
 USER app
 ENV PATH=/home/app/.local/bin:$PATH
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app
+ENV PORT=8000
 
 EXPOSE 8000
 

@@ -3,17 +3,14 @@
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { adminApi } from '@/lib/api/client'
 import { 
   Users, 
   CreditCard, 
-  TrendingUp, 
-  Settings, 
   Plus, 
   Shield, 
   Database,
@@ -259,7 +256,7 @@ export default function SuperAdminPage() {
         </TabsContent>
 
         <TabsContent value="users">
-          <SuperAdminUserManagement users={users || []} />
+          <SuperAdminUserManagement />
         </TabsContent>
 
         <TabsContent value="credits">

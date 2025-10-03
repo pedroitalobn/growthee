@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies directly without copying requirements file first
+RUN pip install --no-cache-dir fastapi uvicorn python-multipart python-jose[cryptography] passlib[bcrypt] sqlalchemy psycopg2-binary alembic pydantic-settings python-dotenv requests beautifulsoup4 selenium webdriver-manager scrapy playwright
+
+# Copy only essential application files
+COPY api/ ./api/
+
+# Create user and set permissions
+RUN useradd -m -u 1001 appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+CMD ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

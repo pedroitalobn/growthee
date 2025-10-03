@@ -1,0 +1,53 @@
+# Dockerfile otimizado para produção - Backend
+FROM python:3.11-alpine AS builder
+
+WORKDIR /app
+
+# Instalar dependências de build para Alpine
+RUN apk add --no-cache \
+    build-base \
+    libffi-dev \
+    openssl-dev
+
+# Copiar requirements e instalar dependências Python
+COPY requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# Stage final
+FROM python:3.11-alpine AS production
+
+WORKDIR /app
+
+# Instalar runtime essencial
+RUN apk add --no-cache \
+    ca-certificates \
+    libffi \
+    openssl
+
+# Criar usuário não-root
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -S appuser -u 1001 -G appgroup
+
+# Copiar dependências Python do builder
+COPY --from=builder /root/.local /home/appuser/.local
+
+# Copiar código da aplicação
+COPY --chown=appuser:appgroup . .
+
+# Gerar cliente Prisma
+RUN python -m prisma generate
+
+# Criar diretório de logs
+RUN mkdir -p logs && chown -R appuser:appgroup logs
+
+# Mudar para usuário não-root
+USER appuser
+
+# Adicionar .local/bin ao PATH
+ENV PATH=/home/appuser/.local/bin:$PATH
+
+# Expor porta
+EXPOSE 8000
+
+# Comando para produção
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

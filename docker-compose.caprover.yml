@@ -1,31 +1,48 @@
 version: '3.8'
 services:
   $$cap_appname:
-    image: pedroitalobn/growthee-frontend:latest
+    image: mrstory/growthee-frontend:latest
     environment:
-      - NEXT_PUBLIC_API_URL=https://enrich.mrstory.app/api
+      - NEXT_PUBLIC_API_URL=https://$$cap_appname-backend.$$cap_root_domain
       - NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=$$cap_stripe_public_key
     depends_on:
       - $$cap_appname-backend
-      - $$cap_appname-redis
     ports:
       - "80:3000"
+    restart: always
 
   $$cap_appname-backend:
-    image: pedroitalobn/growthee-backend:latest
+    image: mrstory/growthee-backend:latest
     environment:
-      - DATABASE_URL=postgresql://$$cap_postgres_user:$$cap_postgres_password@srv-captain--mrs-enrichstory-db:5432/growthee
-      - REDIS_URL=redis://$$cap_appname-redis:6379
+      - DATABASE_URL=postgresql://$$cap_postgres_user:$$cap_postgres_password@srv-captain--$$cap_appname-db:5432/growthee
+      - REDIS_URL=redis://srv-captain--$$cap_appname-redis:6379
       - JWT_SECRET_KEY=$$cap_jwt_secret
-      - STRIPE_SECRET_KEY=$$cap_stripe_
+      - STRIPE_SECRET_KEY=$$cap_stripe_secret
+      - STRIPE_PUBLIC_KEY=$$cap_stripe_public_key
       - BRAVE_API_KEY=$$cap_brave_token
     depends_on:
+      - $$cap_appname-db
       - $$cap_appname-redis
+    ports:
+      - "8000:8000"
+    restart: always
+
+  $$cap_appname-db:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=growthee
+      - POSTGRES_USER=$$cap_postgres_user
+      - POSTGRES_PASSWORD=$$cap_postgres_password
+    volumes:
+      - $$cap_appname-db-data:/var/lib/postgresql/data
+    restart: always
 
   $$cap_appname-redis:
     image: redis:7-alpine
     volumes:
-      - redis-data:/data
+      - $$cap_appname-redis-data:/data
+    restart: always
 
 volumes:
-  redis-data:
+  $$cap_appname-db-data:
+  $$cap_appname-redis-data:

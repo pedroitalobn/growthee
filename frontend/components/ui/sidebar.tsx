@@ -15,25 +15,8 @@ export function Sidebar() {
   const searchParams = useSearchParams()
   
   // Safely get locale and translations with fallbacks
-  let locale: string
-  let t: any
-  
-  try {
-    locale = useLocale()
-    t = useTranslations('navigation')
-  } catch (error) {
-    // Fallback if intl context is not available
-    locale = 'en'
-    t = (key: string) => {
-      const fallbacks: Record<string, string> = {
-        dashboard: 'Dashboard',
-        billing: 'Billing',
-        admin: 'Admin',
-        logout: 'Logout'
-      }
-      return fallbacks[key] || key
-    }
-  }
+  const locale = useLocale() || 'en'
+  const t = useTranslations('navigation')
   
   const { user, logout } = useAuthStore()
 

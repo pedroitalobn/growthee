@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "templateId": "enrichstory",
+  "templateId": "growthee",
   "variables": [
     {
       "id": "$$cap_postgres_user",

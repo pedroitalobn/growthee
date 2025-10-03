@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install only essential dependencies
+RUN pip install --no-cache-dir fastapi uvicorn python-multipart pydantic sqlalchemy psycopg2-binary bcrypt python-jose[cryptography] passlib[bcrypt]
+
+# Copy only the API directory
+COPY api/ ./api/
+
+# Create non-root user
+RUN useradd -m -u 1001 appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

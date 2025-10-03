@@ -21,16 +21,7 @@ const languageNames = {
 export function LanguageSwitcher() {
   const router = useRouter()
   const pathname = usePathname()
-  
-  // Safely get locale with fallback
-  let locale: string
-  
-  try {
-    locale = useLocale()
-  } catch (error) {
-    // Fallback if intl context is not available
-    locale = 'en'
-  }
+  const locale = useLocale() || 'en'
 
   const switchLanguage = (newLocale: string) => {
     // Remove current locale from pathname and add new one

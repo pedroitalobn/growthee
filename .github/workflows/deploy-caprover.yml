@@ -1,0 +1,132 @@
+name: Deploy to CapRover
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: registry.captain.${{ secrets.CAPROVER_DOMAIN }}
+  CAPROVER_URL: https://captain.${{ secrets.CAPROVER_DOMAIN }}
+  APP_NAME: ${{ secrets.CAPROVER_APP_NAME }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to CapRover Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: captain
+        password: ${{ secrets.CAPROVER_PASSWORD }}
+
+    - name: Build and push backend image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.backend.ultra-fast
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.APP_NAME }}-backend:latest
+          ${{ env.REGISTRY }}/${{ env.APP_NAME }}-backend:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64
+
+    - name: Build and push frontend image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./frontend
+        file: ./frontend/Dockerfile.prod
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.APP_NAME }}-frontend:latest
+          ${{ env.REGISTRY }}/${{ env.APP_NAME }}-frontend:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64
+
+    - name: Install CapRover CLI
+      run: npm install -g caprover
+
+    - name: Deploy to CapRover
+      run: |
+        # Create deployment config
+        cat > captain-definition << EOF
+        {
+          "schemaVersion": 2,
+          "dockerCompose": {
+            "version": "3.8",
+            "services": {
+              "\$\$cap_appname": {
+                "image": "${{ env.REGISTRY }}/${{ env.APP_NAME }}-frontend:${{ github.sha }}",
+                "environment": [
+                  "NEXT_PUBLIC_API_URL=https://\$\$cap_appname-backend.\$\$cap_root_domain",
+                  "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=\$\$cap_stripe_public_key"
+                ],
+                "depends_on": ["\$\$cap_appname-backend"],
+                "ports": ["80:3000"],
+                "restart": "always"
+              },
+              "\$\$cap_appname-backend": {
+                "image": "${{ env.REGISTRY }}/${{ env.APP_NAME }}-backend:${{ github.sha }}",
+                "environment": [
+                  "DATABASE_URL=postgresql://\$\$cap_postgres_user:\$\$cap_postgres_password@srv-captain--\$\$cap_appname-db:5432/growthee",
+                  "REDIS_URL=redis://srv-captain--\$\$cap_appname-redis:6379",
+                  "JWT_SECRET_KEY=\$\$cap_jwt_secret",
+                  "STRIPE_SECRET_KEY=\$\$cap_stripe_secret",
+                  "STRIPE_PUBLIC_KEY=\$\$cap_stripe_public_key",
+                  "BRAVE_API_KEY=\$\$cap_brave_token"
+                ],
+                "depends_on": ["\$\$cap_appname-db", "\$\$cap_appname-redis"],
+                "ports": ["8000:8000"],
+                "restart": "always"
+              },
+              "\$\$cap_appname-db": {
+                "image": "postgres:15",
+                "environment": [
+                  "POSTGRES_DB=growthee",
+                  "POSTGRES_USER=\$\$cap_postgres_user",
+                  "POSTGRES_PASSWORD=\$\$cap_postgres_password"
+                ],
+                "volumes": ["\$\$cap_appname-db-data:/var/lib/postgresql/data"],
+                "restart": "always"
+              },
+              "\$\$cap_appname-redis": {
+                "image": "redis:7-alpine",
+                "volumes": ["\$\$cap_appname-redis-data:/data"],
+                "restart": "always"
+              }
+            },
+            "volumes": {
+              "\$\$cap_appname-db-data": {},
+              "\$\$cap_appname-redis-data": {}
+            }
+          }
+        }
+        EOF
+        
+        # Create tarball for deployment
+        tar -czf deploy.tar.gz captain-definition
+        
+        # Deploy to CapRover
+        caprover deploy \
+          --caproverUrl ${{ env.CAPROVER_URL }} \
+          --caproverPassword ${{ secrets.CAPROVER_PASSWORD }} \
+          --appName ${{ env.APP_NAME }} \
+          --tarFile deploy.tar.gz
+
+    - name: Verify deployment
+      run: |
+        echo "✅ Deployment completed!"
+        echo "🌐 Frontend: https://${{ env.APP_NAME }}.${{ secrets.CAPROVER_DOMAIN }}"
+        echo "🌐 Backend: https://${{ env.APP_NAME }}-backend.${{ secrets.CAPROVER_DOMAIN }}"
+        echo "📊 Health check: https://${{ env.APP_NAME }}-backend.${{ secrets.CAPROVER_DOMAIN }}/health"

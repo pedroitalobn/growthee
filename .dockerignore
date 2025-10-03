@@ -1,8 +1,33 @@
-node_modules
-.git
-.env
-*.log
-frontend/
-__pycache__
-*.pyc
-.pytest_cache
+# Ignore everything by default
+*
+
+# Allow essential files
+!requirements.txt
+!requirements-minimal.txt
+!api/
+!prisma/
+
+# Exclude cache and temporary files
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+**/node_modules/
+**/.git/
+**/.env*
+**/*.log
+**/.DS_Store
+**/build/
+**/dist/
+**/*.egg-info/
+**/venv/
+**/.venv/
+**/frontend/
+**/docs/
+**/.next/
+**/.nuxt/
+**/coverage/
+**/results/
+**/ssl/
+**/.trae/
